@@ -171,6 +171,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Minimum fuzzy score for final calls. Default: 30 for genome presets, publication threshold for shin-publication.",
     )
+    parser.add_argument(
+        "--hunter-config",
+        type=Path,
+        default=None,
+        help="Optional CSV with custom Z-DNA Hunter configurations. Overrides --preset configs for this run.",
+    )
     parser.add_argument("--email", default=os.getenv("IBP_EMAIL"), help="IBP/Z-DNA Hunter account email.")
     parser.add_argument("--password", default=os.getenv("IBP_PASSWORD"), help="IBP/Z-DNA Hunter account password.")
     parser.add_argument("--server", default=None, help="Optional IBP API server URL.")
@@ -219,9 +225,62 @@ def clamp(value: Number, lower: Number = 0.0, upper: Number = 100.0) -> Number:
     return max(lower, min(upper, value))
 
 
+def load_hunter_config(path: Path) -> List[Dict[str, object]]:
+    required = {
+        "config_id",
+        "model",
+        "min_sequence_size",
+        "threshold",
+        "score_gc",
+        "score_gtac",
+        "score_at",
+        "score_oth",
+    }
+    rows = read_delimited_text(path.read_text(encoding="utf-8-sig", errors="replace"))
+    if not rows:
+        raise SystemExit(f"Hunter config file is empty: {path}")
+    missing = required - set(rows[0])
+    if missing:
+        raise SystemExit(f"Hunter config file is missing columns: {', '.join(sorted(missing))}")
+    configs: List[Dict[str, object]] = []
+    seen_ids: set[str] = set()
+    for row in rows:
+        config_id = str(row["config_id"]).strip()
+        model = str(row["model"]).strip()
+        if not config_id:
+            raise SystemExit("Hunter config contains an empty config_id.")
+        if config_id in seen_ids:
+            raise SystemExit(f"Hunter config contains duplicate config_id: {config_id}")
+        seen_ids.add(config_id)
+        if model not in {"model1", "model2"}:
+            raise SystemExit(f"Unsupported Hunter model for {config_id}: {model}")
+        min_sequence_size = parse_int(row.get("min_sequence_size"))
+        threshold = parse_float(row.get("threshold"))
+        if min_sequence_size < 1:
+            raise SystemExit(f"Invalid min_sequence_size for {config_id}: {min_sequence_size}")
+        if threshold <= 0.0 or threshold > 100.0:
+            raise SystemExit(f"Invalid threshold for {config_id}: {threshold}")
+        configs.append(
+            {
+                "config_id": config_id,
+                "model": model,
+                "min_sequence_size": min_sequence_size,
+                "threshold": threshold,
+                "score_gc": parse_float(row.get("score_gc")),
+                "score_gtac": parse_float(row.get("score_gtac")),
+                "score_at": parse_float(row.get("score_at")),
+                "score_oth": parse_float(row.get("score_oth")),
+            }
+        )
+    return configs
+
+
 def apply_preset(args: argparse.Namespace) -> None:
     global HUNTER_CONFIGS
-    HUNTER_CONFIGS = [dict(config) for config in HUNTER_PRESETS[args.preset]]
+    if args.hunter_config is not None:
+        HUNTER_CONFIGS = load_hunter_config(args.hunter_config)
+    else:
+        HUNTER_CONFIGS = [dict(config) for config in HUNTER_PRESETS[args.preset]]
 
 
 def effective_min_score(args: argparse.Namespace) -> Number:
@@ -1007,7 +1066,7 @@ def score_feature_table(args: argparse.Namespace) -> None:
             end = row.get("end") or row.get("shin_window_end") or row.get("context_window_end")
             bed_rows.append({"chrom": chrom, "start": start, "end": end, "fuzzy_score": row["fuzzy_score"]})
         write_bedgraph(bed_rows, args.output)
-    summary_data = summary(scored_rows, written_rows, args.mode, args.preset, min_score)
+    summary_data = summary(scored_rows, written_rows, args.mode, args.preset, min_score, args.hunter_config)
     summary_path = args.summary_output or args.output.with_suffix(args.output.suffix + ".summary.json")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary_data, indent=2), encoding="utf-8")
@@ -1208,6 +1267,7 @@ def summary(
     mode: str,
     preset: str,
     min_score: Number,
+    hunter_config_path: Optional[Path],
 ) -> Dict[str, object]:
     scores = [float(row["fuzzy_score"]) for row in rows]
     by_class: Dict[str, int] = {}
@@ -1219,6 +1279,7 @@ def summary(
         by_chrom[chrom] = by_chrom.get(chrom, 0) + 1
     return {
         "preset": preset,
+        "hunter_config_file": str(hunter_config_path) if hunter_config_path else "",
         "mode": mode,
         "min_score": round(min_score, 4),
         "total_candidates": len(rows),
@@ -1258,9 +1319,9 @@ def main() -> None:
     records = selected_fasta_records(args)
     tss = load_tss(args.tss, int(args.tss_coordinate_base))
     print(f"Loaded {len(records)} FASTA record(s) and TSS annotations for {len(tss)} chromosome(s).")
+    config_source = f"custom hunter config {args.hunter_config}" if args.hunter_config else f"preset {args.preset}"
     print(
-        "Using preset "
-        f"{args.preset} with {len(HUNTER_CONFIGS)} Z-DNA Hunter config(s), "
+        f"Using {config_source} with {len(HUNTER_CONFIGS)} Z-DNA Hunter config(s), "
         f"mode={args.mode}, min_score={effective_min_score(args):.4f}."
     )
     api = make_api(args)
@@ -1274,7 +1335,7 @@ def main() -> None:
         write_csv(written_rows, args.output)
     else:
         write_bedgraph(written_rows, args.output)
-    summary_data = summary(rows, written_rows, args.mode, args.preset, effective_min_score(args))
+    summary_data = summary(rows, written_rows, args.mode, args.preset, effective_min_score(args), args.hunter_config)
     summary_path = args.summary_output or args.output.with_suffix(args.output.suffix + ".summary.json")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary_data, indent=2), encoding="utf-8")
