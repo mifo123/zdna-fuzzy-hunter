@@ -166,6 +166,30 @@ python zdna_fuzzy_detector.py \
   --output results/chr2L.shin_publication_like.csv
 ```
 
+Custom Z-DNA Hunter configuration:
+
+```csv
+config_id,model,min_sequence_size,threshold,score_gc,score_gtac,score_at,score_oth
+custom_l8_t40,model2,8,40,2,1,0.5,0
+custom_l10_t65,model2,10,65,2,1,0.5,0
+```
+
+Run with the custom configuration:
+
+```bash
+python zdna_fuzzy_detector.py \
+  --fasta data/genome.fa \
+  --tss data/tss.sga \
+  --hunter-config configs/custom_hunter.csv \
+  --mode balanced \
+  --min-score 30 \
+  --output results/custom_hunter_zdna.csv
+```
+
+Use unique `config_id` values for every experimental setting. When re-running
+experiments with changed parameters, also use a new `--run-name` or add
+`--no-reuse`.
+
 Write all candidates, including candidates below the selected mode and
 `--min-score` thresholds:
 
