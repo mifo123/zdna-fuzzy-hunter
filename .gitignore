@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Local credentials and environment
+.env
+*.env
+credentials*
+
+# Tool outputs and intermediate data
+zdna_fuzzy_runs/
+results/
+outputs/
+*.summary.json
+*.bedgraph
+*.bdg
+
+# Large local biological inputs
+data/
+raw/
+*.fa
+*.fasta
+*.fna
+*.2bit
+
+# System files
+.DS_Store
