@@ -2,8 +2,8 @@
 
 Command line tool for fast genome-scale prioritization of Z-DNA forming
 regions. The pipeline runs selected Z-DNA Hunter analyses through the IBP API
-and applies a tuned fuzzy expert layer using sequence signal and TSS/promoter
-context.
+and applies a tuned fuzzy expert layer using sequence signal and nearest-TSS
+proximity context.
 
 The tool is intended as a lightweight, interpretable layer above Z-DNA Hunter.
 It accepts one chromosome, a multi-chromosome genome FASTA, or a selected
@@ -34,7 +34,8 @@ computes:
 - raw Z-DNA Hunter score
 - candidate length and overlap statistics
 - nearest TSS distance
-- promoter/TSS context score
+- nearest-TSS context score
+- optional overlap annotations from user-supplied genomic or epigenomic BED tracks
 - fuzzy rule activations and final fuzzy score
 
 Three operating modes are available:
@@ -113,6 +114,22 @@ chr2L  12000  12100  gene1  0  +
 
 Coordinates are treated as 0-based by default. Use `--tss-coordinate-base 1` if
 single-position TSS values are 1-based.
+
+### Optional annotation tracks
+
+Candidate regions can be annotated against BED-like genomic context tracks and
+epigenomic tracks. These tracks are exported as overlap columns and do not change
+the fuzzy score unless the model is explicitly retuned.
+
+```bash
+python zdna_fuzzy_detector.py \
+  --fasta data/genome.fa \
+  --tss data/tss.sga \
+  --annotation-bed promoters=tracks/promoters.bed \
+  --annotation-bed exons=tracks/exons.bed \
+  --epigenomic-bed ATAC=tracks/atac_peaks.narrowPeak \
+  --output results/zdna_annotated.csv
+```
 
 ## Examples
 
@@ -211,8 +228,10 @@ CSV output uses 0-based half-open coordinates and contains:
 - `preset`, `mode`, `min_score`
 - `prediction` and `fuzzy_score`
 - fuzzy components: signal, context, evidence, bias, feasibility
-- TSS context: `tss_distance_bp`, `promoter_overlap`, `regulatory_marks`
+- TSS context: `tss_distance_bp`, `tss_proximal`,
+  `tss_proximity_bin`, `tss_context_label`
 - Z-DNA Hunter grid features and per-configuration hit flags
+- optional `annotation_*` and `epigenomic_*` overlap columns when BED tracks are supplied
 - top active fuzzy rules
 
 bedGraph output contains:
@@ -274,7 +293,12 @@ verify that the fuzzy scoring layer has not changed.
   reproducibility.
 - Temporary FASTA slices are removed after a successful run unless
   `--keep-intermediate` is used.
-- The current fuzzy model uses Z-DNA Hunter signal and TSS-derived regulatory
-  context. CpX features are not required by this tool.
+- The current fuzzy model uses Z-DNA Hunter signal and nearest-TSS context. CpX
+  features are not required by this tool.
+- Legacy feature-table inputs with `promoter_overlap`, `regulatory_marks`,
+  `repeat_overlap_pct` or `primer_uniqueness` are accepted for reproducibility,
+  but newly written CSV files use neutral column names:
+  `tss_proximal`, `context_support_bin`, `heuristic_bias_score` and
+  `candidate_uniqueness_score`.
 - `--score-feature-table` reproduces the publication scoring when the same
   candidate feature columns are supplied.

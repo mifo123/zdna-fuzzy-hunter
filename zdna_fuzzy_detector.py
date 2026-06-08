@@ -86,6 +86,13 @@ class Interval:
 
 
 @dataclass(frozen=True)
+class AnnotationTrack:
+    kind: str
+    name: str
+    intervals_by_chrom: Dict[str, List[Tuple[int, int]]]
+
+
+@dataclass(frozen=True)
 class TunedParams:
     signal_weighted: Number = 0.37921
     signal_zdna: Number = 0.051894
@@ -197,7 +204,27 @@ def parse_args() -> argparse.Namespace:
         default="0",
         help="Coordinate base of single-position TSS annotations.",
     )
-    parser.add_argument("--promoter-window", type=int, default=1000, help="Promoter/TSS context window in bp.")
+    parser.add_argument("--promoter-window", type=int, default=1000, help="Nearest-TSS context window in bp.")
+    parser.add_argument(
+        "--annotation-bed",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help=(
+            "Optional genomic-context BED track for candidate overlap annotation, "
+            "for example promoters=tracks/promoters.bed. Can be passed multiple times."
+        ),
+    )
+    parser.add_argument(
+        "--epigenomic-bed",
+        action="append",
+        default=[],
+        metavar="NAME=PATH",
+        help=(
+            "Optional BED/narrowPeak/broadPeak track for candidate overlap annotation, "
+            "for example ATAC=tracks/atac.bed. Can be passed multiple times."
+        ),
+    )
     parser.add_argument("--poll-seconds", type=float, default=2.0, help="Polling interval for API jobs.")
     parser.add_argument("--reuse", action=argparse.BooleanOptionalAction, default=True, help="Reuse API objects with matching tags.")
     parser.add_argument("--keep-intermediate", action="store_true", help="Keep uploaded FASTA slices and raw exports.")
@@ -348,12 +375,42 @@ def read_delimited_text(text: str) -> List[Dict[str, str]]:
 
 def write_csv(rows: Sequence[Dict[str, object]], path: Path, columns: Optional[Sequence[str]] = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(columns or output_columns())
+    if columns is not None:
+        fieldnames = list(columns)
+    else:
+        fieldnames = output_columns()
+        for row in rows:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
             writer.writerow({key: row.get(key, "") for key in fieldnames})
+
+
+def first_present(row: Dict[str, str], names: Sequence[str], default: object = "") -> object:
+    for name in names:
+        value = row.get(name)
+        if value is not None and str(value).strip() != "":
+            return value
+    return default
+
+
+def rename_derived_feature_columns(row: Dict[str, object]) -> Dict[str, object]:
+    renamed = dict(row)
+    aliases = [
+        ("promoter_overlap", "tss_proximal"),
+        ("regulatory_marks", "context_support_bin"),
+        ("repeat_overlap_pct", "heuristic_bias_score"),
+        ("primer_uniqueness", "candidate_uniqueness_score"),
+    ]
+    for old, new in aliases:
+        if old in renamed and new not in renamed:
+            renamed[new] = renamed[old]
+        renamed.pop(old, None)
+    return renamed
 
 
 def read_fasta(path: Path) -> List[Tuple[str, str]]:
@@ -756,6 +813,94 @@ def interval_overlap(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
 
+def parse_track_spec(spec: str, kind: str) -> Tuple[str, Path]:
+    if "=" in spec:
+        name, path_text = spec.split("=", 1)
+        path = Path(path_text)
+    else:
+        path = Path(spec)
+        name = path.stem
+    name = slug(name)
+    if not name:
+        raise SystemExit(f"Invalid {kind} track name in: {spec}")
+    if not path.exists():
+        raise SystemExit(f"{kind.capitalize()} BED track not found: {path}")
+    return name, path
+
+
+def load_bed_intervals(path: Path) -> Dict[str, List[Tuple[int, int]]]:
+    intervals: Dict[str, List[Tuple[int, int]]] = {}
+    with path.open(encoding="utf-8-sig", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#") or line.startswith("track ") or line.startswith("browser "):
+                continue
+            parts = re.split(r"[\t ]+", line)
+            if len(parts) < 3:
+                continue
+            try:
+                start = int(float(parts[1]))
+                end = int(float(parts[2]))
+            except ValueError:
+                continue
+            if end <= start:
+                continue
+            intervals.setdefault(canonical_chrom(parts[0]), []).append((start, end))
+    for values in intervals.values():
+        values.sort()
+    return intervals
+
+
+def load_annotation_tracks(specs: Sequence[str], kind: str) -> List[AnnotationTrack]:
+    tracks: List[AnnotationTrack] = []
+    seen: set[str] = set()
+    for spec in specs:
+        name, path = parse_track_spec(spec, kind)
+        if name in seen:
+            raise SystemExit(f"Duplicate {kind} track name: {name}")
+        seen.add(name)
+        tracks.append(AnnotationTrack(kind=kind, name=name, intervals_by_chrom=load_bed_intervals(path)))
+    return tracks
+
+
+def overlap_with_track(track: AnnotationTrack, chrom: str, start: int, end: int) -> Tuple[int, Number]:
+    intervals = track.intervals_by_chrom.get(canonical_chrom(chrom), [])
+    if not intervals:
+        return 0, 0.0
+    overlap_bp = 0
+    for interval_start, interval_end in intervals:
+        if interval_end <= start:
+            continue
+        if interval_start >= end:
+            break
+        overlap_bp += interval_overlap(start, end, interval_start, interval_end)
+    return overlap_bp, clamp(100.0 * overlap_bp / max(1, end - start))
+
+
+def tss_proximity_bin(distance_bp: int, promoter_window: int) -> int:
+    if distance_bp <= 250:
+        return 3
+    if distance_bp <= promoter_window:
+        return 2
+    if distance_bp <= 5000:
+        return 1
+    return 0
+
+
+def tss_context_label(distance_bp: int, promoter_window: int) -> str:
+    if distance_bp == 0:
+        return "overlaps_tss"
+    if distance_bp <= 250:
+        return "tss_250bp"
+    if distance_bp <= promoter_window:
+        return f"tss_{promoter_window}bp"
+    if distance_bp <= 5000:
+        return "tss_5kb"
+    if distance_bp <= 20000:
+        return "tss_20kb"
+    return "distal"
+
+
 def merge_candidate_bounds(intervals: Sequence[Interval]) -> List[Tuple[int, int]]:
     if not intervals:
         return []
@@ -979,9 +1124,13 @@ def features_from_table_row(row: Dict[str, str]) -> Dict[str, Number]:
         consensus = 100.0 if len(selected) >= 5 else max(0.0, 100.0 - abs(model1 - model2))
         detection_class = ""
     tss_distance = parse_float(row.get("tss_distance_bp"), 50000.0)
-    marks = clamp(100.0 * parse_float(row.get("regulatory_marks")) / 3.0)
-    promoter = 100.0 if parse_bool(row.get("promoter_overlap")) else 0.0
-    repeat = clamp(4.0 * parse_float(row.get("repeat_overlap_pct")))
+    marks = clamp(
+        100.0
+        * parse_float(first_present(row, ["tss_proximity_bin", "cpx_context_count", "context_support_bin", "regulatory_marks"]))
+        / 3.0
+    )
+    promoter = 100.0 if parse_bool(first_present(row, ["tss_proximal", "promoter_overlap"])) else 0.0
+    repeat = clamp(4.0 * parse_float(first_present(row, ["heuristic_bias_score", "repeat_overlap_pct"])))
     disagreement = clamp(100.0 - consensus)
     all5 = strict
     model2_only = 100.0 if model2 > 0.0 and model1 == 0.0 else 0.0
@@ -999,7 +1148,7 @@ def features_from_table_row(row: Dict[str, str]) -> Dict[str, Number]:
     else:
         source_support = 100.0 if cross_tool else 58.0 if predicted_motif else 14.0
     length = parse_float(row.get("length_bp"), 384.0)
-    primer = parse_float(row.get("primer_uniqueness"), 70.0)
+    primer = parse_float(first_present(row, ["candidate_uniqueness_score", "primer_uniqueness"], 70.0), 70.0)
     feasibility = clamp(0.65 * trapezoid_score(length, 8.0, 8.0, 400.0, 450.0) + 0.35 * primer)
     return {
         "weighted": weighted,
@@ -1035,7 +1184,7 @@ def score_feature_table(args: argparse.Namespace) -> None:
         tss_distance = int(parse_float(row.get("tss_distance_bp"), 50000.0))
         max_overlap_pct = parse_float(row.get("grid_max_overlap_pct"))
         prediction = classify(args.mode, score, comp, tss_distance, max_overlap_pct) and score >= min_score
-        out = dict(row)
+        out = rename_derived_feature_columns(row)
         out.update(
             {
                 "preset": args.preset,
@@ -1078,6 +1227,7 @@ def score_feature_table(args: argparse.Namespace) -> None:
 def candidate_rows(
     intervals_by_chrom: Dict[str, List[Interval]],
     tss_by_chrom: Dict[str, List[int]],
+    annotation_tracks: Sequence[AnnotationTrack],
     args: argparse.Namespace,
 ) -> List[Dict[str, object]]:
     params = TunedParams()
@@ -1138,8 +1288,8 @@ def candidate_rows(
                 detection_class = "permissive_only"
             tss_distance = nearest_distance(tss_positions, start, end)
             tss_distance = 50000 if tss_distance is None else int(tss_distance)
-            regulatory_marks = 3 if tss_distance <= 250 else 2 if tss_distance <= args.promoter_window else 1 if tss_distance <= 5000 else 0
-            promoter_overlap = int(tss_distance <= args.promoter_window)
+            proximity_bin = tss_proximity_bin(tss_distance, args.promoter_window)
+            tss_proximal = int(tss_distance <= args.promoter_window)
             features = {
                 "weighted": 100.0 * weighted_fraction,
                 "hunter_vote": 100.0 * hit_fraction,
@@ -1147,8 +1297,8 @@ def candidate_rows(
                 "model2": 100.0 * hit_fraction,
                 "zdna": max_score,
                 "tss": piecewise_tss_score(tss_distance),
-                "marks": clamp(100.0 * regulatory_marks / 3.0),
-                "promoter": 100.0 if promoter_overlap else 0.0,
+                "marks": clamp(100.0 * proximity_bin / 3.0),
+                "promoter": 100.0 if tss_proximal else 0.0,
                 "repeat": 0.0,
                 "disagreement": 100.0,
                 "balance": 0.0,
@@ -1178,8 +1328,9 @@ def candidate_rows(
                 "component_balance": round(comp["balance"], 4),
                 "length_bp": length,
                 "tss_distance_bp": tss_distance,
-                "promoter_overlap": promoter_overlap,
-                "regulatory_marks": regulatory_marks,
+                "tss_proximal": tss_proximal,
+                "tss_proximity_bin": proximity_bin,
+                "tss_context_label": tss_context_label(tss_distance, args.promoter_window),
                 "grid_hit_count": hit_count,
                 "grid_hit_fraction": round(hit_fraction, 6),
                 "grid_weighted_hit_fraction": round(weighted_fraction, 6),
@@ -1198,6 +1349,11 @@ def candidate_rows(
                 config_id = str(config["config_id"])
                 row[f"grid_hit__{config_id}"] = flags[config_id]
                 row[f"grid_overlap_pct__{config_id}"] = round(overlap_by_config[config_id], 4)
+            for track in annotation_tracks:
+                overlap_bp, overlap_pct = overlap_with_track(track, chrom, start, end)
+                prefix = "epigenomic" if track.kind == "epigenomic" else "annotation"
+                row[f"{prefix}_{track.name}_hit"] = int(overlap_bp > 0)
+                row[f"{prefix}_{track.name}_overlap_pct"] = round(overlap_pct, 4)
             rows.append(row)
         print(f"Finished {chrom}: scored {len(components)} candidate(s)", flush=True)
     rows.sort(key=lambda row: (str(row["chrom"]), int(row["start"]), int(row["end"])))
@@ -1223,8 +1379,9 @@ def output_columns() -> List[str]:
         "component_balance",
         "length_bp",
         "tss_distance_bp",
-        "promoter_overlap",
-        "regulatory_marks",
+        "tss_proximal",
+        "tss_proximity_bin",
+        "tss_context_label",
         "grid_hit_count",
         "grid_hit_fraction",
         "grid_weighted_hit_fraction",
@@ -1318,7 +1475,14 @@ def main() -> None:
     args.work_dir.mkdir(parents=True, exist_ok=True)
     records = selected_fasta_records(args)
     tss = load_tss(args.tss, int(args.tss_coordinate_base))
+    genomic_tracks = load_annotation_tracks(args.annotation_bed, "genomic")
+    epigenomic_tracks = load_annotation_tracks(args.epigenomic_bed, "epigenomic")
+    annotation_tracks = [*genomic_tracks, *epigenomic_tracks]
     print(f"Loaded {len(records)} FASTA record(s) and TSS annotations for {len(tss)} chromosome(s).")
+    if genomic_tracks:
+        print(f"Loaded {len(genomic_tracks)} genomic-context BED annotation track(s).")
+    if epigenomic_tracks:
+        print(f"Loaded {len(epigenomic_tracks)} epigenomic BED annotation track(s).")
     config_source = f"custom hunter config {args.hunter_config}" if args.hunter_config else f"preset {args.preset}"
     print(
         f"Using {config_source} with {len(HUNTER_CONFIGS)} Z-DNA Hunter config(s), "
@@ -1328,7 +1492,7 @@ def main() -> None:
     sequences = upload_sequences(api, records, args)
     analysis_ids = run_hunter_grid(api, sequences, args)
     intervals_by_chrom = load_exported_intervals(api, analysis_ids, records, args)
-    rows = candidate_rows(intervals_by_chrom, tss, args)
+    rows = candidate_rows(intervals_by_chrom, tss, annotation_tracks, args)
     written_rows = rows if args.include_all else [row for row in rows if int(row["prediction"]) == 1]
     out_format = infer_format(args.output, args.format)
     if out_format == "csv":
