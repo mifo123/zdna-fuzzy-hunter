@@ -1,0 +1,18 @@
+[project]
+name = "zdna-fuzzy-hunter"
+version = "1.1.0"
+description = "Local and API-backed Z-DNA Hunter scans with an interpretable fuzzy prioritization layer"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Michal Petrovic" },
+]
+dependencies = []
+
+[project.optional-dependencies]
+api = [
+  "DNA-analyser-IBP @ git+https://github.com/patrikkaura/dna-analyser-ibp.git",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
