@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Genome-scale Z-DNA candidate prioritization with Z-DNA Hunter and fuzzy logic.
 
-The tool uploads FASTA records to the IBP API, runs a compact two-configuration
-Z-DNA Hunter grid, builds candidate intervals, adds TSS-distance context and
-scores candidates with a tuned fuzzy expert layer.
+The default backend runs the Z-DNA Hunter core locally.  An optional IBP API
+backend is retained for compatibility with hosted analyses.  Both backends
+produce 0-based, half-open intervals that are merged, annotated with nearest-TSS
+context and scored by the same fixed fuzzy expert model.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import getpass
 import json
 import math
 import os
+import platform
 import re
 import statistics
 import time
@@ -24,6 +26,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 
 Number = float
+MODEL_VERSION = "1.1.0"
 
 
 def hunter_config(config_id: str, min_sequence_size: int, threshold: Number) -> Dict[str, object]:
@@ -74,6 +77,8 @@ class FastaRecord:
 
 @dataclass(frozen=True)
 class Interval:
+    """A genomic interval using 0-based, half-open ``[start, end)`` coordinates."""
+
     chrom: str
     start: int
     end: int
@@ -94,6 +99,13 @@ class AnnotationTrack:
 
 @dataclass(frozen=True)
 class TunedParams:
+    """Fixed publication parameters selected by CV-guided Shin random search.
+
+    The same folds contributed to hyperparameter selection and to the reported
+    cross-validated estimate.  Those results are therefore tuning-aware internal
+    validation, not a fully nested or independent estimate of generalization.
+    """
+
     signal_weighted: Number = 0.37921
     signal_zdna: Number = 0.051894
     signal_vote: Number = 0.198225
@@ -156,14 +168,103 @@ BIAS_TERMS = {
     "very_high": FuzzyTerm("very_high", (84, 94, 100, 100)),
 }
 
+FUZZY_RULE_SPECS = [
+    {"id": "AF1", "if": "signal is very_high AND evidence is very_high AND bias is very_low", "then": 98.0},
+    {"id": "AF2", "if": "signal is very_high AND evidence is high_or_very_high AND bias is very_low_or_low", "then": 93.0},
+    {"id": "AF3", "if": "signal is high AND evidence is very_high AND context is medium_or_higher AND bias is very_low_or_low", "then": 89.0},
+    {"id": "AF4", "if": "signal is high AND evidence is high AND bias is low_or_medium", "then": 82.0},
+    {"id": "AF5", "if": "signal is medium AND evidence is high_or_very_high AND context is high", "then": 72.0},
+    {"id": "AF6", "if": "signal is high AND evidence is medium AND context is low", "then": 64.0},
+    {"id": "AF7", "if": "signal is medium AND evidence is medium AND bias is low", "then": 58.0},
+    {"id": "AF8", "if": "signal is very_low AND evidence is low", "then": 12.0},
+    {"id": "AF9", "if": "bias is high_or_very_high AND evidence is low_or_medium", "then": 22.0},
+    {"id": "AF10", "if": "signal is high AND cross-model balance is low", "then": 48.0},
+    {"id": "AF11", "if": "signal is very_high AND cross-model balance is very_high AND feasibility is medium", "then": 91.0},
+    {"id": "AF12", "if": "signal is low AND bias is high_or_very_high", "then": 14.0},
+]
+
+MODEL2_RUN_PATTERN = re.compile(r"[AG][CT](?:[AG][CT])*[AG]?|[CT][AG](?:[CT][AG])*[CT]?")
+
+
+@dataclass(frozen=True)
+class LocalHunterHit:
+    """One local Z-DNA Hunter hit in sequence-local half-open coordinates."""
+
+    start: int
+    end: int
+    score_percent: Number
+
+
+def hunter_pair_score(first: str, second: str, config: Dict[str, object]) -> Number:
+    """Return the configured Z-DNA Hunter score for one adjacent base pair."""
+    pair = (first.upper(), second.upper())
+    if pair in {("G", "C"), ("C", "G")}:
+        return parse_float(config["score_gc"])
+    if pair in {("G", "T"), ("T", "G"), ("A", "C"), ("C", "A")}:
+        return parse_float(config["score_gtac"])
+    if pair in {("A", "T"), ("T", "A")}:
+        return parse_float(config["score_at"])
+    return parse_float(config.get("score_oth"))
+
+
+def positive_score_runs(sequence: str, config: Dict[str, object]) -> Iterable[Tuple[int, str, Number]]:
+    """Yield maximal runs whose adjacent pairs have a positive Hunter score."""
+    sequence = sequence.upper()
+    is_standard_model2 = (
+        str(config.get("model", "")).lower() == "model2"
+        and parse_float(config.get("score_gc")) > 0.0
+        and parse_float(config.get("score_gtac")) > 0.0
+        and parse_float(config.get("score_at")) > 0.0
+        and parse_float(config.get("score_oth")) == 0.0
+    )
+    if is_standard_model2:
+        for match in MODEL2_RUN_PATTERN.finditer(sequence):
+            run = match.group(0)
+            score_sum = sum(hunter_pair_score(run[index], run[index + 1], config) for index in range(len(run) - 1))
+            yield match.start(), run, score_sum
+        return
+
+    run_length = 1
+    score_sum = 0.0
+    for index in range(len(sequence)):
+        pair_score = hunter_pair_score(sequence[index], sequence[index + 1], config) if index < len(sequence) - 1 else 0.0
+        if pair_score > 0.0:
+            run_length += 1
+            score_sum += pair_score
+            continue
+        if run_length > 1:
+            start = index - run_length + 1
+            yield start, sequence[start : start + run_length], score_sum
+        run_length = 1
+        score_sum = 0.0
+
+
+def local_hunter_hits(sequence: str, config: Dict[str, object]) -> Iterable[LocalHunterHit]:
+    """Run the local Java-compatible Z-DNA Hunter state machine on a sequence."""
+    minimum_length = int(config["min_sequence_size"])
+    threshold = parse_float(config["threshold"])
+    max_pair_score = max(
+        parse_float(config["score_gc"]),
+        parse_float(config["score_gtac"]),
+        parse_float(config["score_at"]),
+    )
+    for start, run, score_sum in positive_score_runs(sequence, config):
+        if len(run) < minimum_length:
+            continue
+        score = score_sum / 2.0
+        max_possible = ((len(run) - 1) * max_pair_score) / 2.0
+        score_percent = 100.0 * score / max_possible if max_possible > 0.0 else 0.0
+        if score_percent >= threshold:
+            yield LocalHunterHit(start=start, end=start + len(run), score_percent=score_percent)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run Z-DNA Hunter and fuzzy prioritization on a FASTA genome, chromosome or region."
+        description="Run local or API-backed Z-DNA Hunter and fuzzy prioritization on a FASTA genome, chromosome or region."
     )
     parser.add_argument("--fasta", type=Path, default=None, help="Input FASTA file.")
     parser.add_argument("--tss", type=Path, default=None, help="TSS annotation in SGA, BED or CSV/TSV format.")
-    parser.add_argument("--output", type=Path, required=True, help="Output CSV or bedGraph path.")
+    parser.add_argument("--output", type=Path, default=None, help="Output CSV or bedGraph path.")
     parser.add_argument("--format", choices=["csv", "bedgraph"], default=None, help="Output format; inferred by extension.")
     parser.add_argument("--mode", choices=["balanced", "moderate", "strict"], default="balanced")
     parser.add_argument(
@@ -184,8 +285,14 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional CSV with custom Z-DNA Hunter configurations. Overrides --preset configs for this run.",
     )
-    parser.add_argument("--email", default=os.getenv("IBP_EMAIL"), help="IBP/Z-DNA Hunter account email.")
-    parser.add_argument("--password", default=os.getenv("IBP_PASSWORD"), help="IBP/Z-DNA Hunter account password.")
+    parser.add_argument(
+        "--hunter-backend",
+        choices=["local", "api"],
+        default="local",
+        help="Run the bundled local Hunter core (default) or submit scans to the IBP API.",
+    )
+    parser.add_argument("--email", default=os.getenv("IBP_EMAIL"), help="IBP account email; used only with --hunter-backend api.")
+    parser.add_argument("--password", default=os.getenv("IBP_PASSWORD"), help="IBP account password; used only with --hunter-backend api.")
     parser.add_argument("--server", default=None, help="Optional IBP API server URL.")
     parser.add_argument("--work-dir", type=Path, default=Path("zdna_fuzzy_runs"), help="Intermediate files directory.")
     parser.add_argument("--run-name", default=None, help="Reusable API tag/name prefix. Default is based on FASTA stem.")
@@ -200,9 +307,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--tss-coordinate-base",
-        choices=["0", "1"],
-        default="0",
-        help="Coordinate base of single-position TSS annotations.",
+        choices=["auto", "0", "1"],
+        default="auto",
+        help="Coordinate base of point TSS annotations. Auto treats SGA as 1-based and BED as 0-based.",
     )
     parser.add_argument("--promoter-window", type=int, default=1000, help="Nearest-TSS context window in bp.")
     parser.add_argument(
@@ -245,6 +352,18 @@ def parse_args() -> argparse.Namespace:
         help="Validation mode: score an already prepared candidate feature table and skip API execution.",
     )
     validation.add_argument("--feature-table", dest="feature_table", type=Path, help=argparse.SUPPRESS)
+    inspection = parser.add_argument_group("model inspection")
+    inspection.add_argument(
+        "--describe-model",
+        action="store_true",
+        help="Print the complete fixed model specification as JSON and exit.",
+    )
+    inspection.add_argument(
+        "--model-spec-output",
+        type=Path,
+        default=None,
+        help="Optional path receiving the complete model specification JSON.",
+    )
     return parser.parse_args()
 
 
@@ -474,7 +593,38 @@ def selected_fasta_records(args: argparse.Namespace) -> List[FastaRecord]:
     return selected
 
 
+def run_local_hunter(records: Sequence[FastaRecord]) -> Dict[str, List[Interval]]:
+    """Run every configured Hunter scan locally and return half-open intervals."""
+    intervals_by_chrom: Dict[str, List[Interval]] = {}
+    for record in records:
+        chrom_intervals = intervals_by_chrom.setdefault(record.output_chrom, [])
+        for config in HUNTER_CONFIGS:
+            config_id = str(config["config_id"])
+            hit_count = 0
+            for hit in local_hunter_hits(record.sequence, config):
+                chrom_intervals.append(
+                    Interval(
+                        chrom=record.output_chrom,
+                        start=record.coordinate_offset + hit.start,
+                        end=record.coordinate_offset + hit.end,
+                        score=hit.score_percent,
+                        source=config_id,
+                    )
+                )
+                hit_count += 1
+            print(f"Local Hunter {record.output_chrom}/{config_id}: {hit_count} interval(s)", flush=True)
+        chrom_intervals.sort(key=lambda item: (item.start, item.end, item.source))
+    return intervals_by_chrom
+
+
 def looks_like_header(parts: Sequence[str]) -> bool:
+    if (
+        len(parts) >= 4
+        and parts[1].strip().lower() == "tss"
+        and re.fullmatch(r"-?\d+", parts[2].strip())
+        and parts[3].strip() in {"+", "-"}
+    ):
+        return False
     header_tokens = {
         "chrom",
         "chromosome",
@@ -492,26 +642,39 @@ def looks_like_header(parts: Sequence[str]) -> bool:
     return bool(header_tokens & normalized)
 
 
-def parse_tss_no_header(parts: Sequence[str], coordinate_base: int) -> Optional[Tuple[str, int]]:
+def parse_tss_no_header(parts: Sequence[str], coordinate_base: Optional[int]) -> Optional[Tuple[str, int]]:
+    """Parse SGA, BED-like or point TSS records into a 0-based point coordinate."""
     if len(parts) < 2:
         return None
     chrom = parts[0]
+    if (
+        len(parts) >= 4
+        and parts[1].strip().lower() == "tss"
+        and re.fullmatch(r"-?\d+", parts[2])
+        and parts[3] in {"+", "-"}
+    ):
+        base = 1 if coordinate_base is None else coordinate_base
+        return chrom, int(parts[2]) - base
     if len(parts) >= 3 and re.fullmatch(r"[+-]", parts[2]) and re.fullmatch(r"-?\d+", parts[1]):
-        pos = int(parts[1]) - coordinate_base
+        base = 0 if coordinate_base is None else coordinate_base
+        pos = int(parts[1]) - base
         return chrom, pos
     if len(parts) >= 3 and re.fullmatch(r"-?\d+", parts[1]) and re.fullmatch(r"-?\d+", parts[2]):
         start = int(parts[1])
         end = int(parts[2])
         strand = next((part for part in parts[3:8] if part in {"+", "-"}), "+")
-        pos = end if strand == "-" else start
+        pos = max(start, end - 1) if strand == "-" else start
         return chrom, pos
     if re.fullmatch(r"-?\d+", parts[1]):
-        pos = int(parts[1]) - coordinate_base
+        base = 0 if coordinate_base is None else coordinate_base
+        pos = int(parts[1]) - base
         return chrom, pos
     return None
 
 
-def load_tss(path: Path, coordinate_base: int) -> Dict[str, List[int]]:
+def load_tss(path: Path, coordinate_base: object = "auto") -> Dict[str, List[int]]:
+    """Load TSS annotations, normalizing all supported formats to 0-based points."""
+    requested_base = None if str(coordinate_base) == "auto" else int(str(coordinate_base))
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     data: Dict[str, List[int]] = {}
     non_comment = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
@@ -541,19 +704,20 @@ def load_tss(path: Path, coordinate_base: int) -> Dict[str, List[int]]:
             if not chrom:
                 continue
             if pos_col is not None:
-                pos = parse_int(row.get(pos_col)) - coordinate_base
+                base = 0 if requested_base is None else requested_base
+                pos = parse_int(row.get(pos_col)) - base
             elif start_col is not None:
                 start = parse_int(row.get(start_col))
                 end = parse_int(row.get(end_col), start) if end_col else start
                 strand = str(row.get(strand_col, "+")).strip() if strand_col else "+"
-                pos = end if strand == "-" else start
+                pos = max(start, end - 1) if strand == "-" else start
             else:
                 continue
             data.setdefault(canonical_chrom(chrom), []).append(pos)
     else:
         for line in non_comment:
             parts = re.split(r"[\t,; ]+", line.strip())
-            parsed = parse_tss_no_header(parts, coordinate_base)
+            parsed = parse_tss_no_header(parts, requested_base)
             if parsed is None:
                 continue
             chrom, pos = parsed
@@ -598,8 +762,8 @@ def load_ibp_modules():
         from DNA_analyser_IBP.utils import normalize_name
     except ImportError as exc:
         raise SystemExit(
-            "Missing DNA_analyser_IBP. Install requirements first:\n"
-            "  pip install -r requirements.txt"
+            "Missing DNA_analyser_IBP. Install the optional API requirements first:\n"
+            "  pip install -r requirements-api.txt"
         ) from exc
     return Api, ApiEmptyResponse, Types, normalize_name
 
@@ -756,6 +920,7 @@ def export_analysis(api, analysis_id: str) -> str:
 
 
 def result_interval(row: Dict[str, str], coordinate_base: int, offset: int, chrom: str, source: str) -> Optional[Interval]:
+    """Convert an API CSV row with inclusive end coordinates to half-open form."""
     fields = list(row.keys())
     start_col = detect_column(fields, ["start", "position", "pos", "from", "begin", "base_start", "start_position"])
     end_col = detect_column(fields, ["end", "stop", "to", "base_end", "end_position"])
@@ -901,24 +1066,8 @@ def tss_context_label(distance_bp: int, promoter_window: int) -> str:
     return "distal"
 
 
-def merge_candidate_bounds(intervals: Sequence[Interval]) -> List[Tuple[int, int]]:
-    if not intervals:
-        return []
-    sorted_intervals = sorted(intervals, key=lambda item: (item.start, item.end))
-    merged: List[Tuple[int, int]] = []
-    current_start = sorted_intervals[0].start
-    current_end = sorted_intervals[0].end
-    for interval in sorted_intervals[1:]:
-        if interval.start <= current_end:
-            current_end = max(current_end, interval.end)
-        else:
-            merged.append((current_start, current_end))
-            current_start, current_end = interval.start, interval.end
-    merged.append((current_start, current_end))
-    return merged
-
-
 def merge_candidate_components(intervals: Sequence[Interval]) -> List[Tuple[int, int, List[Interval]]]:
+    """Merge overlapping half-open hits while retaining their source intervals."""
     if not intervals:
         return []
     sorted_intervals = sorted(intervals, key=lambda item: (item.start, item.end))
@@ -937,22 +1086,6 @@ def merge_candidate_components(intervals: Sequence[Interval]) -> List[Tuple[int,
             current_intervals = [interval]
     components.append((current_start, current_end, current_intervals))
     return components
-
-
-def overlaps_for_source(intervals: Sequence[Interval], start: int, end: int, source: str) -> Tuple[int, Number, int]:
-    overlap_bp = 0
-    max_score = 0.0
-    best_length = 0
-    for interval in intervals:
-        if interval.source != source:
-            continue
-        overlap = interval_overlap(start, end, interval.start, interval.end)
-        if overlap <= 0:
-            continue
-        overlap_bp += overlap
-        max_score = max(max_score, interval.score)
-        best_length = max(best_length, interval.length)
-    return overlap_bp, max_score, best_length
 
 
 def component_stats_by_source(
@@ -1072,6 +1205,60 @@ def fuzzy_rules(comp: Dict[str, Number]) -> Tuple[Number, List[Dict[str, object]
     return (50.0 if denominator == 0.0 else numerator / denominator), active
 
 
+def model_specification() -> Dict[str, object]:
+    """Return a machine-readable description of every fixed model element."""
+    params = TunedParams()
+    return {
+        "name": "ZDNA-Fuzzy Hunter",
+        "model_version": MODEL_VERSION,
+        "coordinate_convention": "0-based, half-open [start, end)",
+        "tuning_scope": (
+            "Weights and the primary threshold were selected on the Shin human benchmark "
+            "by deterministic random search guided by five stratified folds. The same folds "
+            "contributed to hyperparameter selection, so the reported CV estimate is internal "
+            "tuning-aware validation rather than nested or independent validation."
+        ),
+        "hunter_presets": HUNTER_PRESETS,
+        "membership_functions": {
+            "main_components": {name: [term.a, term.b, term.c, term.d] for name, term in TERMS.items()},
+            "bias": {name: [term.a, term.b, term.c, term.d] for name, term in BIAS_TERMS.items()},
+            "shape": "trapezoidal [a,b,c,d]",
+        },
+        "component_and_final_parameters": dict(params.__dict__),
+        "rules": FUZZY_RULE_SPECS,
+        "final_score": {
+            "base": "offset + final_signal*signal + final_evidence*evidence + final_context*context + final_feasibility*feasibility - final_bias*bias",
+            "mixture": "(1-rule_mix)*base + rule_mix*Takagi-Sugeno rule score",
+            "rule_fraction": params.rule_mix,
+            "weighted_component_fraction": 1.0 - params.rule_mix,
+            "primary_threshold": FUZZY_THRESHOLD,
+            "grid_hit_gate": True,
+        },
+        "operating_point_filters": {
+            "moderate": {
+                "exclude_if_tss_distance_lte_bp": MODERATE_TSS_BP,
+                "and_score_lte": MODERATE_MAX_SCORE,
+            },
+            "strict": {
+                "exclude_if_tss_distance_lte_bp": STRICT_TSS_BP,
+                "and_signal_lte": STRICT_MAX_SIGNAL,
+                "and_max_overlap_pct_lte": STRICT_MAX_OVERLAP_PCT,
+            },
+        },
+    }
+
+
+def emit_model_specification(path: Optional[Path]) -> None:
+    """Print the model specification and optionally persist the same JSON."""
+    text = json.dumps(model_specification(), indent=2)
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text + "\n", encoding="utf-8")
+        print(f"Wrote model specification to {path}")
+    else:
+        print(text)
+
+
 def score_features(features: Dict[str, Number], params: TunedParams) -> Tuple[Number, Dict[str, Number], List[Dict[str, object]]]:
     comp = components(features, params)
     rule_score, active_rules = fuzzy_rules(comp)
@@ -1172,6 +1359,8 @@ def features_from_table_row(row: Dict[str, str]) -> Dict[str, Number]:
 
 def score_feature_table(args: argparse.Namespace) -> None:
     assert args.feature_table is not None
+    assert args.output is not None
+    started = time.perf_counter()
     rows = read_delimited_text(args.feature_table.read_text(encoding="utf-8-sig", errors="replace"))
     params = TunedParams()
     min_score = effective_min_score(args)
@@ -1202,6 +1391,7 @@ def score_feature_table(args: argparse.Namespace) -> None:
             }
         )
         scored_rows.append(out)
+    scoring_finished = time.perf_counter()
     written_rows = scored_rows if args.include_all else [row for row in scored_rows if int(row["prediction"]) == 1]
     out_format = infer_format(args.output, args.format)
     if out_format == "csv":
@@ -1215,7 +1405,22 @@ def score_feature_table(args: argparse.Namespace) -> None:
             end = row.get("end") or row.get("shin_window_end") or row.get("context_window_end")
             bed_rows.append({"chrom": chrom, "start": start, "end": end, "fuzzy_score": row["fuzzy_score"]})
         write_bedgraph(bed_rows, args.output)
-    summary_data = summary(scored_rows, written_rows, args.mode, args.preset, min_score, args.hunter_config)
+    output_finished = time.perf_counter()
+    timings = {
+        "feature_table_load_and_scoring": round(scoring_finished - started, 6),
+        "output_write": round(output_finished - scoring_finished, 6),
+        "total_before_summary": round(output_finished - started, 6),
+    }
+    summary_data = summary(
+        scored_rows,
+        written_rows,
+        args.mode,
+        args.preset,
+        min_score,
+        args.hunter_config,
+        backend="feature-table",
+        timings=timings,
+    )
     summary_path = args.summary_output or args.output.with_suffix(args.output.suffix + ".summary.json")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary_data, indent=2), encoding="utf-8")
@@ -1425,6 +1630,8 @@ def summary(
     preset: str,
     min_score: Number,
     hunter_config_path: Optional[Path],
+    backend: str,
+    timings: Optional[Dict[str, Number]] = None,
 ) -> Dict[str, object]:
     scores = [float(row["fuzzy_score"]) for row in rows]
     by_class: Dict[str, int] = {}
@@ -1435,6 +1642,9 @@ def summary(
         by_class[detection_class] = by_class.get(detection_class, 0) + 1
         by_chrom[chrom] = by_chrom.get(chrom, 0) + 1
     return {
+        "tool": "ZDNA-Fuzzy Hunter",
+        "model_version": MODEL_VERSION,
+        "hunter_backend": backend,
         "preset": preset,
         "hunter_config_file": str(hunter_config_path) if hunter_config_path else "",
         "mode": mode,
@@ -1449,6 +1659,11 @@ def summary(
         "chromosome_candidate_counts": by_chrom,
         "hunter_configs": HUNTER_CONFIGS,
         "fuzzy_threshold": FUZZY_THRESHOLD,
+        "runtime": {
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "timings_seconds": timings or {},
+        },
     }
 
 
@@ -1465,8 +1680,16 @@ def maybe_cleanup(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    started = time.perf_counter()
     args = parse_args()
     apply_preset(args)
+    if args.describe_model:
+        emit_model_specification(args.model_spec_output)
+        return
+    if args.model_spec_output is not None:
+        emit_model_specification(args.model_spec_output)
+    if args.output is None:
+        raise SystemExit("--output is required unless --describe-model is used.")
     if args.feature_table is not None:
         score_feature_table(args)
         return
@@ -1474,7 +1697,7 @@ def main() -> None:
         raise SystemExit("--fasta and --tss are required unless --score-feature-table is used.")
     args.work_dir.mkdir(parents=True, exist_ok=True)
     records = selected_fasta_records(args)
-    tss = load_tss(args.tss, int(args.tss_coordinate_base))
+    tss = load_tss(args.tss, args.tss_coordinate_base)
     genomic_tracks = load_annotation_tracks(args.annotation_bed, "genomic")
     epigenomic_tracks = load_annotation_tracks(args.epigenomic_bed, "epigenomic")
     annotation_tracks = [*genomic_tracks, *epigenomic_tracks]
@@ -1486,24 +1709,48 @@ def main() -> None:
     config_source = f"custom hunter config {args.hunter_config}" if args.hunter_config else f"preset {args.preset}"
     print(
         f"Using {config_source} with {len(HUNTER_CONFIGS)} Z-DNA Hunter config(s), "
-        f"mode={args.mode}, min_score={effective_min_score(args):.4f}."
+        f"backend={args.hunter_backend}, mode={args.mode}, min_score={effective_min_score(args):.4f}."
     )
-    api = make_api(args)
-    sequences = upload_sequences(api, records, args)
-    analysis_ids = run_hunter_grid(api, sequences, args)
-    intervals_by_chrom = load_exported_intervals(api, analysis_ids, records, args)
+    input_finished = time.perf_counter()
+    if args.hunter_backend == "local":
+        intervals_by_chrom = run_local_hunter(records)
+    else:
+        api = make_api(args)
+        sequences = upload_sequences(api, records, args)
+        analysis_ids = run_hunter_grid(api, sequences, args)
+        intervals_by_chrom = load_exported_intervals(api, analysis_ids, records, args)
+    hunter_finished = time.perf_counter()
     rows = candidate_rows(intervals_by_chrom, tss, annotation_tracks, args)
+    scoring_finished = time.perf_counter()
     written_rows = rows if args.include_all else [row for row in rows if int(row["prediction"]) == 1]
     out_format = infer_format(args.output, args.format)
     if out_format == "csv":
         write_csv(written_rows, args.output)
     else:
         write_bedgraph(written_rows, args.output)
-    summary_data = summary(rows, written_rows, args.mode, args.preset, effective_min_score(args), args.hunter_config)
+    output_finished = time.perf_counter()
+    timings = {
+        "input_loading": round(input_finished - started, 6),
+        "hunter": round(hunter_finished - input_finished, 6),
+        "candidate_scoring": round(scoring_finished - hunter_finished, 6),
+        "output_write": round(output_finished - scoring_finished, 6),
+        "total_before_summary": round(output_finished - started, 6),
+    }
+    summary_data = summary(
+        rows,
+        written_rows,
+        args.mode,
+        args.preset,
+        effective_min_score(args),
+        args.hunter_config,
+        backend=args.hunter_backend,
+        timings=timings,
+    )
     summary_path = args.summary_output or args.output.with_suffix(args.output.suffix + ".summary.json")
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text(json.dumps(summary_data, indent=2), encoding="utf-8")
-    maybe_cleanup(args)
+    if args.hunter_backend == "api":
+        maybe_cleanup(args)
     print(f"Wrote {len(written_rows)} row(s) to {args.output}")
     print(f"Wrote summary to {summary_path}")
 
