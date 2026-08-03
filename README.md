@@ -1,95 +1,179 @@
-# Z-DNA Fuzzy Detector
+# ZDNA-Fuzzy Hunter
 
-Command line tool for fast genome-scale prioritization of Z-DNA forming
-regions. The pipeline runs selected Z-DNA Hunter analyses through the IBP API
-and applies a tuned fuzzy expert layer using sequence signal and nearest-TSS
-proximity context.
+ZDNA-Fuzzy Hunter is a command-line tool for fast, interpretable prioritization
+of Z-DNA-forming regions. It combines two complementary Z-DNA Hunter scans with
+a fixed fuzzy expert layer using sequence evidence and nearest-transcription
+start site (TSS) context.
 
-The tool is intended as a lightweight, interpretable layer above Z-DNA Hunter.
-It accepts one chromosome, a multi-chromosome genome FASTA, or a selected
-subregion and exports prioritized candidates as CSV or bedGraph.
+The default workflow is fully local and uses only the Python standard library.
+An optional IBP API backend is retained for hosted Z-DNA Hunter analyses.
 
-## Method
+## What the tool does
 
-The tool provides several Z-DNA Hunter presets. The default is
-`genome-balanced`, intended for practical genome-scale use:
+The `genome-balanced` preset runs two Z-DNA Hunter model 2 configurations:
 
-| ID | Model | Minimal length | Threshold |
+| ID | Minimum length | Threshold | Role |
+|---|---:|---:|---|
+| `m2_l8_t30` | 8 bp | 30% | permissive candidate recovery |
+| `m2_l10_t60` | 10 bp | 60% | stringent confirmation |
+
+The `shin-publication` preset changes the permissive arm to `m2_l6_t30` to
+reproduce the Shin benchmark configuration. The `genome-strict` preset runs only
+`m2_l10_t60`.
+
+Overlapping scan hits are merged. For every candidate, the tool computes:
+
+- per-configuration hit and overlap statistics;
+- maximum raw Z-DNA Hunter score and candidate length;
+- distance to the nearest TSS;
+- sequence-signal, evidence, context, bias and feasibility components;
+- the fuzzy score and the strongest activated rules;
+- optional overlaps with user-supplied genomic or epigenomic BED tracks.
+
+All exported genomic intervals use **0-based, half-open `[start, end)`
+coordinates**. A region entered with `--region`, such as
+`chr2L:1000-5000`, is deliberately interpreted as a **1-based closed** user
+interval and converted internally.
+
+## Local and API backends
+
+The default local backend is a Python port of the Z-DNA Hunter state machine
+used by the MENDELU/IBP backend. It runs the complete FASTA-to-candidate pipeline
+without uploading sequences:
+
+```text
+FASTA + TSS -> local paired Z-DNA Hunter scans -> fuzzy layer -> CSV/bedGraph
+```
+
+The local implementation was regression-checked on the eight main Drosophila
+dm6 chromosomes. It reproduced 482,286 merged candidates and 33,125 strict calls
+from the stored IBP run. Coordinates and calls matched; 16 of 33,125 exported
+scores differed only by 0.0001 because the API CSV stores rounded raw scores.
+
+Use `--hunter-backend api` when a hosted IBP run is preferred. API use requires
+credentials and the optional client dependency described below. Raw API exports
+are retained for provenance.
+
+## Fuzzy model and parameters
+
+Five trapezoidal linguistic values are used for the main components: very low,
+low, medium, high and very high. Bias uses a separate set of five trapezoids.
+Twelve Takagi-Sugeno-style rules produce a rule score. The final score is:
+
+```text
+base = offset
+       + 0.439786 * signal
+       + 0.448789 * evidence
+       + 0.010134 * context
+       + 0.101291 * feasibility
+       - 0.471126 * bias
+
+final = 0.850764 * base + 0.149236 * rule_score
+```
+
+Thus, the rule output contributes **14.9236%**, and the weighted component score
+contributes **85.0764%**, to the final mixture. The publication threshold is
+19.157, with an additional gate requiring at least one upstream Hunter hit.
+
+Every component coefficient, membership breakpoint, operating-point filter and
+rule is available in machine-readable JSON:
+
+```bash
+python zdna_fuzzy_detector.py --describe-model
+python zdna_fuzzy_detector.py \
+  --describe-model \
+  --model-spec-output model_specification.json
+```
+
+The model specification is generated from the same constants used by the
+scoring code, preventing documentation from drifting away from the executable
+model.
+
+## Parameter selection and validation scope
+
+The fixed fuzzy weights were selected by deterministic random search on the
+Shin human benchmark. Candidate weight sets were ranked using predictions from
+five stratified folds, and each fold selected its decision threshold from its
+training portion. However, the same five folds contributed to weight selection
+and to the reported cross-validated estimate. The result is therefore an
+**internal, tuning-aware validation**, not fully nested cross-validation and not
+an independent estimate of generalization.
+
+The reported Shin operating points are:
+
+| Model / mode | Recall | Specificity | Balanced accuracy |
 |---|---:|---:|---:|
-| `m2_l8_t30` | model2 | 8 bp | 30% |
-| `m2_l10_t60` | model2 | 10 bp | 60% |
+| Z-DNABERT hg18 threshold 0.25, published external row | 0.877 | 0.890 | 0.880 |
+| ZDNA-Fuzzy Hunter, balanced | 0.859 | 0.904 | 0.882 |
+| ZDNA-Fuzzy Hunter, moderate-specificity | 0.840 | 0.945 | 0.892 |
+| ZDNA-Fuzzy Hunter, strict-specificity | 0.830 | 0.973 | 0.901 |
 
-Additional presets:
+Because Z-DNABERT was not rerun in the same pipeline, the near-equal balanced
+accuracy values should be interpreted as comparable published operating points,
+not evidence that one method outperforms the other.
 
-| Preset | Configurations | Use |
-|---|---|---|
-| `genome-balanced` | `m2_l8_t30 + m2_l10_t60` | default genome-scale analysis |
-| `genome-strict` | `m2_l10_t60` | shorter, high-confidence candidate lists |
-| `shin-publication` | `m2_l6_t30 + m2_l10_t60` | Shin validation and publication reproduction |
+### Independent U2OS check
 
-Overlapping hits are merged into candidate regions. For each candidate the tool
-computes:
+The fixed Shin model was also checked against the reviewer-suggested human U2OS
+Z-DNA ChIP-seq series **GSE290662**. The analysis used hg19 chromosome 22,
+GENCODE v19 TSS annotation, two WT Z22-IP replicates (`GSM8818990` and
+`GSM8818991`) and two matched input replicates (`GSM8818982` and `GSM8818983`).
+No U2OS measurement was used to change a weight, rule or threshold.
 
-- Z-DNA Hunter support across the two configurations
-- raw Z-DNA Hunter score
-- candidate length and overlap statistics
-- nearest TSS distance
-- nearest-TSS context score
-- optional overlap annotations from user-supplied genomic or epigenomic BED tracks
-- fuzzy rule activations and final fuzzy score
+Among 20,000 candidates sampled deterministically across fuzzy-score deciles,
+10.05% of the highest-decile windows and 7.40% of the lowest-decile windows met
+the replicate-consistent high-Z22-IP criterion (risk ratio 1.36; bootstrap 95%
+CI for the rate difference 0.009-0.044). The continuous fuzzy-score versus
+Z22-IP/input rank correlation was 0.0004, and the high-decile enrichment was not
+observed for candidates more than 20 kb from a TSS. This is therefore modest,
+TSS-associated independent support, not evidence of broad assay or species
+transfer. Exact inputs, deterministic sampling and output fields are documented
+in [`validation/README.md`](validation/README.md).
 
-Three operating modes are available:
+### Independent original-data rice check
 
-| Mode | Purpose |
-|---|---|
-| `balanced` | default operating point, closest to the ZDNABERT comparison |
-| `moderate` | higher specificity, moderate loss of recall |
-| `strict` | strongest specificity mode for shorter candidate lists |
-
-For genome-scale runs, candidates are also filtered by `--min-score`. If not
-specified, the default is `30` for genome presets. The `shin-publication` preset
-uses the original publication threshold by default.
-
-## Shin validation reference
-
-The fuzzy layer was tuned and validated against experimentally verified Shin
-loci. The operating points used by this script correspond to:
-
-| Model | Recall | Specificity | Balanced accuracy |
-|---|---:|---:|---:|
-| ZDNABERT HG18 threshold 0.25 | 0.877 | 0.890 | 0.880 |
-| Fuzzy detector, balanced | 0.859 | 0.904 | 0.882 |
-| Fuzzy detector, moderate specificity | 0.840 | 0.945 | 0.892 |
-| Fuzzy detector, strict specificity | 0.830 | 0.973 | 0.901 |
-
-Genome-scale generation keeps the runtime profile of Z-DNA Hunter plus a small
-post-processing step, while the fuzzy layer provides an adjustable decision
-threshold without training a deep model for every run.
+We also used the original data associated with reviewer-specified
+**doi:10.1111/pbi.14585**: rice ZIP-seq/CUT&Tag series **GSE252954**. The unchanged model generated
+558,171 candidates on MSU/UGA Release 7 chromosome 1. In a deterministic
+20,000-candidate sample, 16.8% of the highest-decile and 2.8% of the
+lowest-decile windows met the prespecified replicate-consistent ZIP-seq
+criterion (risk ratio 6.0; bootstrap 95% CI for the rate difference
+0.121-0.158), although the complete decile pattern was non-monotonic.
+Continuous fuzzy score correlated modestly with ZIP-seq
+enrichment (Spearman 0.162) and weakly with CUT&Tag signal (0.065). Every
+highest-decile sampled candidate was within 20 kb of a TSS, so this supports a
+TSS-proximal cross-species signal but does not isolate sequence transfer from
+the model's explicit TSS feature.
 
 ## Installation
 
-Create an environment and install the IBP API client:
+Python **3.10 or newer** is required. The code has been tested with Python 3.10
+and 3.12.
+
+The local backend has no third-party runtime dependencies:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+python -m pip install --upgrade pip
 ```
 
-The script does not store credentials. You can pass them on the command line or
-use environment variables:
+For the optional IBP API backend:
 
 ```bash
+pip install -r requirements-api.txt
 export IBP_EMAIL="your.email@example.org"
 export IBP_PASSWORD="your-password"
 ```
+
+Credentials are read from `--email` / `--password` or from `IBP_EMAIL` /
+`IBP_PASSWORD`; they are not written to output files.
 
 ## Input formats
 
 ### FASTA
 
-The FASTA file may contain one sequence, multiple chromosomes, or a larger
-genome assembly:
+Single-record and multi-record FASTA files are accepted:
 
 ```text
 >chr2L
@@ -98,42 +182,47 @@ ACGT...
 ACGT...
 ```
 
-To process only selected records, use `--chromosomes chr2L,chr2R`. To process a
-subregion from a multi-FASTA file, use `--region chr2L:100000-200000`.
+Use `--chromosomes chr2L,chr2R` to restrict records or
+`--region chr2L:100000-200000` to scan a 1-based closed interval.
 
 ### TSS annotation
 
-The tool accepts common SGA/BED/CSV/TSV-like files. Headered files should contain
-a chromosome column and either a TSS/position column or start/end coordinates.
-Headerless inputs are interpreted as one of:
+SGA, BED and headered CSV/TSV files are supported. SGA input is recognized
+directly, for example:
 
 ```text
-chr2L  12345  +
-chr2L  12000  12100  gene1  0  +
+chr1  TSS  850984  +  1  SAMD11
 ```
 
-Coordinates are treated as 0-based by default. Use `--tss-coordinate-base 1` if
-single-position TSS values are 1-based.
+BED input uses ordinary 0-based half-open coordinates:
+
+```text
+chr1  850983  850984  SAMD11  0  +
+```
+
+With the default `--tss-coordinate-base auto`, SGA point coordinates are
+treated as 1-based and BED intervals as 0-based. For a negative-strand BED
+feature, the TSS is the last covered base (`end - 1`). For ambiguous generic
+point files, set `--tss-coordinate-base 0` or `1` explicitly.
 
 ### Optional annotation tracks
 
-Candidate regions can be annotated against BED-like genomic context tracks and
-epigenomic tracks. These tracks are exported as overlap columns and do not change
-the fuzzy score unless the model is explicitly retuned.
+BED, narrowPeak and broadPeak tracks may be attached for output annotation.
+They do not change the published fuzzy score unless the model is explicitly
+retuned.
 
 ```bash
 python zdna_fuzzy_detector.py \
   --fasta data/genome.fa \
   --tss data/tss.sga \
   --annotation-bed promoters=tracks/promoters.bed \
-  --annotation-bed exons=tracks/exons.bed \
   --epigenomic-bed ATAC=tracks/atac_peaks.narrowPeak \
   --output results/zdna_annotated.csv
 ```
 
-## Examples
+## Common commands
 
-Balanced CSV output for a whole genome:
+Fully local whole-genome analysis:
 
 ```bash
 python zdna_fuzzy_detector.py \
@@ -141,49 +230,35 @@ python zdna_fuzzy_detector.py \
   --tss data/tss.sga \
   --preset genome-balanced \
   --mode balanced \
-  --min-score 30 \
   --output results/zdna_balanced.csv
 ```
 
-Strict bedGraph output for one chromosome:
+Strict calls on selected chromosomes:
 
 ```bash
 python zdna_fuzzy_detector.py \
   --fasta data/genome.fa \
   --tss data/tss.sga \
-  --chromosomes chr2L \
-  --preset genome-strict \
-  --mode strict \
-  --format bedgraph \
-  --output results/chr2L.strict.bedgraph
-```
-
-Moderate mode on a selected interval:
-
-```bash
-python zdna_fuzzy_detector.py \
-  --fasta data/genome.fa \
-  --tss data/tss.sga \
-  --region chr2L:1000000-1500000 \
+  --chromosomes chr2L,chr2R \
   --preset genome-balanced \
-  --mode moderate \
-  --min-score 30 \
-  --output results/chr2L_1Mb_1_5Mb.moderate.csv
+  --mode strict \
+  --min-score 50 \
+  --output results/dm6_strict.csv
 ```
 
-Publication-like high-recall run for Shin-style validation:
+Hosted IBP backend:
 
 ```bash
 python zdna_fuzzy_detector.py \
+  --hunter-backend api \
   --fasta data/genome.fa \
   --tss data/tss.sga \
-  --chromosomes chr2L \
-  --preset shin-publication \
+  --preset genome-balanced \
   --mode balanced \
-  --output results/chr2L.shin_publication_like.csv
+  --output results/zdna_api.csv
 ```
 
-Custom Z-DNA Hunter configuration:
+Custom Hunter grid:
 
 ```csv
 config_id,model,min_sequence_size,threshold,score_gc,score_gtac,score_at,score_oth
@@ -191,86 +266,44 @@ custom_l8_t40,model2,8,40,2,1,0.5,0
 custom_l10_t65,model2,10,65,2,1,0.5,0
 ```
 
-Run with the custom configuration:
-
 ```bash
 python zdna_fuzzy_detector.py \
   --fasta data/genome.fa \
   --tss data/tss.sga \
-  --hunter-config configs/custom_hunter.csv \
+  --hunter-config custom_hunter.csv \
   --mode balanced \
-  --min-score 30 \
-  --output results/custom_hunter_zdna.csv
+  --output results/custom.csv
 ```
 
-Use unique `config_id` values for every experimental setting. When re-running
-experiments with changed parameters, also use a new `--run-name` or add
-`--no-reuse`.
-
-Write all candidates, including candidates below the selected mode and
-`--min-score` thresholds:
-
-```bash
-python zdna_fuzzy_detector.py \
-  --fasta data/chr2L.fa \
-  --tss data/tss.sga \
-  --preset genome-balanced \
-  --mode balanced \
-  --include-all \
-  --output results/chr2L.all_candidates.csv
-```
+Use unique `config_id` values. For API reruns with changed parameters, also use
+a new `--run-name` or `--no-reuse`.
 
 ## Outputs
 
-CSV output uses 0-based half-open coordinates and contains:
+CSV output includes:
 
-- `chrom`, `start`, `end`, `candidate_id`
-- `preset`, `mode`, `min_score`
-- `prediction` and `fuzzy_score`
-- fuzzy components: signal, context, evidence, bias, feasibility
-- TSS context: `tss_distance_bp`, `tss_proximal`,
-  `tss_proximity_bin`, `tss_context_label`
-- Z-DNA Hunter grid features and per-configuration hit flags
-- optional `annotation_*` and `epigenomic_*` overlap columns when BED tracks are supplied
-- top active fuzzy rules
+- `chrom`, `start`, `end`, `candidate_id`;
+- `preset`, `mode`, `min_score`, `prediction`, `fuzzy_score`;
+- component scores and nearest-TSS fields;
+- grid hit, overlap, score and detection-class fields;
+- optional `annotation_*` and `epigenomic_*` columns;
+- top active fuzzy rules.
 
-bedGraph output contains:
+bedGraph output contains four columns:
 
 ```text
 chrom  start  end  fuzzy_score
 ```
 
-By default only candidates accepted by the selected mode are written. Use
-`--include-all` to export every merged candidate.
+By default, only accepted candidates are written. `--include-all` exports every
+merged candidate. Each run also writes a JSON summary containing the complete
+Hunter configuration, model version, backend, counts, hardware/Python metadata
+and stage-level timings.
 
-Each run also writes a JSON summary next to the output file:
+### Feature-table reproducibility mode
 
-```json
-{
-  "preset": "genome-balanced",
-  "mode": "balanced",
-  "min_score": 30.0,
-  "total_candidates": 1234,
-  "selected_candidates": 431,
-  "mean_fuzzy_score": 22.41,
-  "detection_class_counts": {
-    "stable_parameter_hit": 911,
-    "strict_consensus": 323
-  }
-}
-```
-
-## Validation and reproducibility
-
-The standard workflow is always:
-
-```text
-FASTA + TSS -> Z-DNA Hunter API -> fuzzy detector -> CSV/bedGraph
-```
-
-For model validation, regression tests or publication reproducibility, the
-script can also re-score an already prepared candidate feature table without
-running the API:
+Prepared candidate features can be rescored without running either Hunter
+backend:
 
 ```bash
 python zdna_fuzzy_detector.py \
@@ -281,24 +314,55 @@ python zdna_fuzzy_detector.py \
   --output results/shin_rescored.csv
 ```
 
-This mode is not required for normal genome, chromosome or interval analysis.
-It is useful when the candidate feature table is fixed and the goal is to
-verify that the fuzzy scoring layer has not changed.
+## Runtime benchmark
 
-## Notes
+One complete local run on the eight main dm6 chromosomes used a MacBook Air
+with an Apple M2 (8 CPU cores), 16 GB RAM, macOS 26.6 and Python 3.12.13.
 
-- Credentials are read from `--email` / `--password` or from `IBP_EMAIL` /
-  `IBP_PASSWORD`.
-- Raw Z-DNA Hunter exports are kept under `zdna_fuzzy_runs/raw_exports` for
-  reproducibility.
-- Temporary FASTA slices are removed after a successful run unless
-  `--keep-intermediate` is used.
-- The current fuzzy model uses Z-DNA Hunter signal and nearest-TSS context. CpX
-  features are not required by this tool.
-- Legacy feature-table inputs with `promoter_overlap`, `regulatory_marks`,
-  `repeat_overlap_pct` or `primer_uniqueness` are accepted for reproducibility,
-  but newly written CSV files use neutral column names:
-  `tss_proximal`, `context_support_bin`, `heuristic_bias_score` and
-  `candidate_uniqueness_score`.
-- `--score-feature-table` reproduces the publication scoring when the same
-  candidate feature columns are supplied.
+| Stage | Time (s) |
+|---|---:|
+| FASTA/TSS loading | 1.87 |
+| two local Z-DNA Hunter scans | 77.46 |
+| merging and fuzzy scoring of 482,286 candidates | 8.97 |
+| writing 33,125 strict calls | 0.47 |
+| measured total before JSON summary | 88.78 |
+| external wall-clock total | 89.58 |
+
+Separately, rescoring and writing the existing 33,125-row dm6 feature table took
+a median 0.91 s over five runs (range 0.90-0.96 s). Runtime depends on genome
+size, number of Hunter configurations, storage and optional API/network latency;
+therefore the tool does not claim that every whole-genome run completes within
+seconds.
+
+## Testing
+
+Run the standard-library test suite with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Tests cover SGA/BED coordinate normalization, negative-strand BED TSS handling,
+API inclusive-end conversion, local Hunter coordinates and model-specification
+completeness.
+
+## Limitations
+
+- Fuzzy weights and the primary threshold were developed on the human Shin
+  benchmark. The GSE290662 and original-data GSE252954 checks are limited to one
+  chromosome each, deterministic samples and fixed-window signal criteria; they
+  are not second labelled classification benchmarks. The rice result is
+  cross-species but fully TSS-proximal in its highest decile, so broad species
+  and threshold transfer still require prospective testing.
+- TSS proximity is associated with the Shin benchmark and can lift borderline
+  candidates. Inspect component scores and use sequence-only evidence when
+  comparing datasets with very different TSS distributions.
+- Context and epigenomic BED overlaps are annotations unless a model is retuned
+  to use them.
+- Z-DNA Hunter, Z-Hunt II/Z-GENIE, ZSeeker, DeepZ and Z-DNABERT implement
+  different scoring assumptions; cross-tool numerical scores are not directly
+  interchangeable.
+
+## License
+
+ZDNA-Fuzzy Hunter is released under the [MIT License](LICENSE).
