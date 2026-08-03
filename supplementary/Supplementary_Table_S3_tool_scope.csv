@@ -1,0 +1,8 @@
+tool,method_family,execution,role_in_revision,quantitative_test_on_shin
+ZDNA-Fuzzy Hunter 1.1.0,Z-DNA Hunter features plus fixed fuzzy expert layer,Local by default; optional IBP API,Primary method,Yes
+Z-DNA Hunter,Sequence-scoring heuristic,Local implementation and optional IBP API,Raw baseline and feature generator,Yes
+Z-Hunt II,Thermodynamic Z-DNA propensity,Legacy local program,Historical comparator; discussed,No; no frozen per-locus run available
+Z-GENIE,R/Shiny workflow around Z-Hunt prediction,Local or hosted,Usability-oriented comparator; discussed,No; no frozen per-locus run available
+ZSeeker,Machine-learning sequence classifier,Published software/web workflow,Recent comparator; discussed,No; published workflow not rerun
+DeepZ,Deep neural network,Published software,Deep-learning comparator; discussed,No; literature result only
+Z-DNABERT,Transformer model,Published software,Published aggregate comparator,Published result only

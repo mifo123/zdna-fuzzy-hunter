@@ -1,0 +1,239 @@
+{
+  "name": "ZDNA-Fuzzy Hunter",
+  "model_version": "1.1.0",
+  "coordinate_convention": "0-based, half-open [start, end)",
+  "tuning_scope": "Weights and the primary threshold were selected on the Shin human benchmark by deterministic random search guided by five stratified folds. The same folds contributed to hyperparameter selection, so the reported CV estimate is internal tuning-aware validation rather than nested or independent validation.",
+  "hunter_presets": {
+    "genome-balanced": [
+      {
+        "config_id": "m2_l8_t30",
+        "model": "model2",
+        "min_sequence_size": 8,
+        "threshold": 30.0,
+        "score_gc": 2.0,
+        "score_gtac": 1.0,
+        "score_at": 0.5,
+        "score_oth": 0.0
+      },
+      {
+        "config_id": "m2_l10_t60",
+        "model": "model2",
+        "min_sequence_size": 10,
+        "threshold": 60.0,
+        "score_gc": 2.0,
+        "score_gtac": 1.0,
+        "score_at": 0.5,
+        "score_oth": 0.0
+      }
+    ],
+    "genome-strict": [
+      {
+        "config_id": "m2_l10_t60",
+        "model": "model2",
+        "min_sequence_size": 10,
+        "threshold": 60.0,
+        "score_gc": 2.0,
+        "score_gtac": 1.0,
+        "score_at": 0.5,
+        "score_oth": 0.0
+      }
+    ],
+    "shin-publication": [
+      {
+        "config_id": "m2_l6_t30",
+        "model": "model2",
+        "min_sequence_size": 6,
+        "threshold": 30.0,
+        "score_gc": 2.0,
+        "score_gtac": 1.0,
+        "score_at": 0.5,
+        "score_oth": 0.0
+      },
+      {
+        "config_id": "m2_l10_t60",
+        "model": "model2",
+        "min_sequence_size": 10,
+        "threshold": 60.0,
+        "score_gc": 2.0,
+        "score_gtac": 1.0,
+        "score_at": 0.5,
+        "score_oth": 0.0
+      }
+    ]
+  },
+  "membership_functions": {
+    "main_components": {
+      "very_low": [
+        0,
+        0,
+        8,
+        22
+      ],
+      "low": [
+        12,
+        24,
+        36,
+        50
+      ],
+      "medium": [
+        38,
+        50,
+        62,
+        74
+      ],
+      "high": [
+        62,
+        74,
+        84,
+        94
+      ],
+      "very_high": [
+        86,
+        94,
+        100,
+        100
+      ]
+    },
+    "bias": {
+      "very_low": [
+        0,
+        0,
+        6,
+        16
+      ],
+      "low": [
+        8,
+        18,
+        28,
+        40
+      ],
+      "medium": [
+        30,
+        42,
+        55,
+        68
+      ],
+      "high": [
+        58,
+        70,
+        82,
+        92
+      ],
+      "very_high": [
+        84,
+        94,
+        100,
+        100
+      ]
+    },
+    "shape": "trapezoidal [a,b,c,d]"
+  },
+  "component_and_final_parameters": {
+    "signal_weighted": 0.37921,
+    "signal_zdna": 0.051894,
+    "signal_vote": 0.198225,
+    "signal_model1": 0.191368,
+    "signal_model2": 0.179302,
+    "signal_all5_bonus": 3.089634,
+    "context_tss": 0.47675,
+    "context_promoter": 0.02146,
+    "context_marks": 0.408899,
+    "evidence_source": 0.459564,
+    "evidence_model1": 0.130052,
+    "evidence_model2": 0.355236,
+    "evidence_balance": 0.055148,
+    "evidence_all5_bonus": 5.240791,
+    "bias_repeat": 0.296978,
+    "bias_disagreement": 0.16273,
+    "bias_model2_only": 0.284105,
+    "bias_no_hit": 0.256187,
+    "final_signal": 0.439786,
+    "final_evidence": 0.448789,
+    "final_context": 0.010134,
+    "final_feasibility": 0.101291,
+    "final_bias": 0.471126,
+    "rule_mix": 0.149236,
+    "offset": 4.36488
+  },
+  "rules": [
+    {
+      "id": "AF1",
+      "if": "signal is very_high AND evidence is very_high AND bias is very_low",
+      "then": 98.0
+    },
+    {
+      "id": "AF2",
+      "if": "signal is very_high AND evidence is high_or_very_high AND bias is very_low_or_low",
+      "then": 93.0
+    },
+    {
+      "id": "AF3",
+      "if": "signal is high AND evidence is very_high AND context is medium_or_higher AND bias is very_low_or_low",
+      "then": 89.0
+    },
+    {
+      "id": "AF4",
+      "if": "signal is high AND evidence is high AND bias is low_or_medium",
+      "then": 82.0
+    },
+    {
+      "id": "AF5",
+      "if": "signal is medium AND evidence is high_or_very_high AND context is high",
+      "then": 72.0
+    },
+    {
+      "id": "AF6",
+      "if": "signal is high AND evidence is medium AND context is low",
+      "then": 64.0
+    },
+    {
+      "id": "AF7",
+      "if": "signal is medium AND evidence is medium AND bias is low",
+      "then": 58.0
+    },
+    {
+      "id": "AF8",
+      "if": "signal is very_low AND evidence is low",
+      "then": 12.0
+    },
+    {
+      "id": "AF9",
+      "if": "bias is high_or_very_high AND evidence is low_or_medium",
+      "then": 22.0
+    },
+    {
+      "id": "AF10",
+      "if": "signal is high AND cross-model balance is low",
+      "then": 48.0
+    },
+    {
+      "id": "AF11",
+      "if": "signal is very_high AND cross-model balance is very_high AND feasibility is medium",
+      "then": 91.0
+    },
+    {
+      "id": "AF12",
+      "if": "signal is low AND bias is high_or_very_high",
+      "then": 14.0
+    }
+  ],
+  "final_score": {
+    "base": "offset + final_signal*signal + final_evidence*evidence + final_context*context + final_feasibility*feasibility - final_bias*bias",
+    "mixture": "(1-rule_mix)*base + rule_mix*Takagi-Sugeno rule score",
+    "rule_fraction": 0.149236,
+    "weighted_component_fraction": 0.850764,
+    "primary_threshold": 19.157,
+    "grid_hit_gate": true
+  },
+  "operating_point_filters": {
+    "moderate": {
+      "exclude_if_tss_distance_lte_bp": 10,
+      "and_score_lte": 19.5
+    },
+    "strict": {
+      "exclude_if_tss_distance_lte_bp": 50,
+      "and_signal_lte": 38.51,
+      "and_max_overlap_pct_lte": 2.0
+    }
+  }
+}
