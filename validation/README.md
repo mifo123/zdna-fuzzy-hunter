@@ -1,4 +1,23 @@
-# Independent experimental validation
+# Validation and benchmark reproduction
+
+## Shin benchmark
+
+The exact reported Shin benchmark can be reproduced without network access or
+an API account:
+
+```bash
+python validation/reproduce_shin_benchmark.py
+```
+
+The script uses the released 385-locus feature table in `validation/data/`,
+runs the public CLI in all three operating modes and verifies every confusion
+matrix and reported performance metric. See `validation/data/README.md` for
+input provenance, coordinate conventions and the SHA-256 checksum.
+
+This is the canonical benchmark-reproduction command. Supplementary Table S1
+is a publication output and is not accepted as a substitute input table.
+
+## Independent experimental validation
 
 This workflow reproduces the independent, frozen-model check reported in the
 revised manuscript. It uses the human U2OS Z-DNA ChIP-seq series **GSE290662**.

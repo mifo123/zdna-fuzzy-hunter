@@ -31,5 +31,13 @@ raw/
 *.fna
 *.2bit
 
+# Small, immutable publication inputs required by the validation tests
+!validation/data/
+!validation/data/**
+
 # System files
 .DS_Store
+
+# Locally generated submission archive (the tracked supplementary/ directory is canonical)
+/supplementary.zip
+/dist/

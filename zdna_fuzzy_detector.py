@@ -1226,6 +1226,14 @@ def model_specification() -> Dict[str, object]:
         },
         "component_and_final_parameters": dict(params.__dict__),
         "rules": FUZZY_RULE_SPECS,
+        "rule_evaluation": {
+            "modes": ["balanced", "moderate", "strict"],
+            "behavior": (
+                "All rules are evaluated for every candidate before operating-mode filters are applied. "
+                "Operating modes do not enable or disable individual rules."
+            ),
+            "or_notation": "A slash in manuscript rule labels and '_or_' in machine-readable labels mean logical OR.",
+        },
         "final_score": {
             "base": "offset + final_signal*signal + final_evidence*evidence + final_context*context + final_feasibility*feasibility - final_bias*bias",
             "mixture": "(1-rule_mix)*base + rule_mix*Takagi-Sugeno rule score",

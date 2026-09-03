@@ -1,0 +1,41 @@
+{
+  "model_version": "1.1.0",
+  "input_sha256": "eeae4ae255adf0e5ee243305a46e17c1ba6add9fda90c120cf36b2b872e2c107",
+  "loci": {
+    "total": 385,
+    "positive": 312,
+    "negative": 73
+  },
+  "modes": {
+    "balanced": {
+      "tp": 268,
+      "fn": 44,
+      "fp": 7,
+      "tn": 66,
+      "selected": 275,
+      "recall": 0.858974,
+      "specificity": 0.90411,
+      "balanced_accuracy": 0.881542
+    },
+    "moderate": {
+      "tp": 262,
+      "fn": 50,
+      "fp": 4,
+      "tn": 69,
+      "selected": 266,
+      "recall": 0.839744,
+      "specificity": 0.945205,
+      "balanced_accuracy": 0.892475
+    },
+    "strict": {
+      "tp": 259,
+      "fn": 53,
+      "fp": 2,
+      "tn": 71,
+      "selected": 261,
+      "recall": 0.830128,
+      "specificity": 0.972603,
+      "balanced_accuracy": 0.901365
+    }
+  }
+}

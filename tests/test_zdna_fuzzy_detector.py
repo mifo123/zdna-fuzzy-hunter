@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -61,6 +63,26 @@ class ModelSpecificationTests(unittest.TestCase):
         self.assertAlmostEqual(spec["final_score"]["rule_fraction"], 0.149236)
         self.assertAlmostEqual(spec["final_score"]["weighted_component_fraction"], 0.850764)
         self.assertEqual(set(spec["membership_functions"]["main_components"]), set(zfd.TERMS))
+        self.assertEqual(spec["rule_evaluation"]["modes"], ["balanced", "moderate", "strict"])
+
+
+class ShinReproductionTests(unittest.TestCase):
+    def test_released_shin_table_reproduces_all_operating_points(self) -> None:
+        repo_root = MODULE_PATH.parent
+        script = repo_root / "validation" / "reproduce_shin_benchmark.py"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            completed = subprocess.run(
+                [sys.executable, str(script), "--output-dir", tmpdir],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            summary = json.loads((Path(tmpdir) / "shin_benchmark_metrics.json").read_text(encoding="utf-8"))
+            self.assertTrue(summary["matches_released_expected_values"])
+            self.assertEqual(summary["modes"]["balanced"]["tp"], 268)
+            self.assertEqual(summary["modes"]["balanced"]["fp"], 7)
 
 
 if __name__ == "__main__":

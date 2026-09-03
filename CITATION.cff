@@ -1,0 +1,33 @@
+cff-version: 1.2.0
+message: "If you use ZDNA-Fuzzy Hunter, please cite the archived software release."
+title: "ZDNA-Fuzzy Hunter"
+type: software
+version: 1.1.0
+authors:
+  - family-names: "Petrovič"
+    given-names: "Michal"
+    affiliation: "Mendel University in Brno"
+  - family-names: "Trenz"
+    given-names: "Oldřich"
+    affiliation: "Mendel University in Brno"
+  - family-names: "Kledus"
+    given-names: "Filip"
+    affiliation: "Institute of Biophysics, Czech Academy of Sciences"
+  - family-names: "Brázda"
+    given-names: "Václav"
+    affiliation: "Institute of Biophysics, Czech Academy of Sciences"
+  - family-names: "Šťastný"
+    given-names: "Jiří"
+    affiliation: "Mendel University in Brno"
+repository-code: "https://github.com/mifo123/zdna-fuzzy-hunter"
+url: "https://github.com/mifo123/zdna-fuzzy-hunter"
+license: MIT
+abstract: >-
+  A local and optionally API-backed command-line implementation of paired
+  Z-DNA Hunter scans with a fixed, interpretable fuzzy prioritization layer.
+keywords:
+  - Z-DNA
+  - bioinformatics
+  - fuzzy inference
+  - sequence analysis
+  - candidate prioritization

@@ -75,6 +75,14 @@ Thus, the rule output contributes **14.9236%**, and the weighted component score
 contributes **85.0764%**, to the final mixture. The publication threshold is
 19.157, with an additional gate requiring at least one upstream Hunter hit.
 
+All 12 fuzzy rules are evaluated for every candidate in every operating mode.
+The balanced, moderate and strict modes do not enable or disable rules; they
+apply different decision filters only after the fuzzy score has been computed.
+In rule descriptions, a slash or an `_or_` expression denotes logical OR. On
+the released Shin feature table, AF5-AF7 and AF10-AF11 have zero activation
+because no locus satisfies their antecedent memberships, not because a mode
+switches them off.
+
 Every component coefficient, membership breakpoint, operating-point filter and
 rule is available in machine-readable JSON:
 
@@ -111,6 +119,23 @@ The reported Shin operating points are:
 Because Z-DNABERT was not rerun in the same pipeline, the near-equal balanced
 accuracy values should be interpreted as comparable published operating points,
 not evidence that one method outperforms the other.
+
+### Exact Shin benchmark reproduction
+
+The repository includes the immutable 385-locus input feature table, expected
+confusion matrices and a standard-library-only reproduction script. From a
+fresh clone, run:
+
+```bash
+python validation/reproduce_shin_benchmark.py
+```
+
+The command invokes the released CLI for the balanced, moderate and strict
+operating modes, writes per-locus predictions and summary tables to
+`results/shin_reproduction/`, and exits with an error if any count or metric
+differs from the released expected values. It verifies the input table by
+SHA-256 before scoring. Input provenance and the expected values are documented
+in [`validation/data/README.md`](validation/data/README.md).
 
 ### Independent U2OS check
 
@@ -307,26 +332,43 @@ backend:
 
 ```bash
 python zdna_fuzzy_detector.py \
-  --score-feature-table data/shin_advanced_predictions.csv \
+  --score-feature-table validation/data/shin_publication_features.csv \
   --preset shin-publication \
   --mode balanced \
   --include-all \
   --output results/shin_rescored.csv
 ```
 
+`supplementary/Supplementary_Table_S1_Shin_per_locus.csv` is a compact
+publication output, not a scoring input. Use the released validation feature
+table above when reproducing the benchmark.
+
 ## Runtime benchmark
 
 One complete local run on the eight main dm6 chromosomes used a MacBook Air
 with an Apple M2 (8 CPU cores), 16 GB RAM, macOS 26.6 and Python 3.12.13.
+The reported benchmark used the `genome-balanced` preset
+(`m2_l8_t30` plus `m2_l10_t60`), `strict` mode and `--min-score 50`:
+
+```bash
+python zdna_fuzzy_detector.py \
+  --fasta data/dm6/dm6.fa \
+  --tss data/dm6/dm6_refGene_tss.sga \
+  --chromosomes chr2L,chr2R,chr3L,chr3R,chr4,chrM,chrX,chrY \
+  --preset genome-balanced \
+  --mode strict \
+  --min-score 50 \
+  --output results/dm6_main_chromosomes_strict.csv
+```
 
 | Stage | Time (s) |
 |---|---:|
-| FASTA/TSS loading | 1.87 |
-| two local Z-DNA Hunter scans | 77.46 |
-| merging and fuzzy scoring of 482,286 candidates | 8.97 |
-| writing 33,125 strict calls | 0.47 |
-| measured total before JSON summary | 88.78 |
-| external wall-clock total | 89.58 |
+| FASTA/TSS loading | 1.875 |
+| two local Z-DNA Hunter scans | 77.457 |
+| merging and fuzzy scoring of 482,286 candidates | 8.975 |
+| writing 33,125 strict calls | 0.470 |
+| measured total before JSON summary | 88.776 |
+| external wall-clock total | 89.580 |
 
 Separately, rescoring and writing the existing 33,125-row dm6 feature table took
 a median 0.91 s over five runs (range 0.90-0.96 s). Runtime depends on genome
@@ -344,7 +386,8 @@ python -m unittest discover -s tests -v
 
 Tests cover SGA/BED coordinate normalization, negative-strand BED TSS handling,
 API inclusive-end conversion, local Hunter coordinates and model-specification
-completeness.
+completeness. They also rerun all three Shin operating points from the released
+feature table and verify the exact confusion matrices and metrics.
 
 ## Limitations
 
@@ -366,3 +409,10 @@ completeness.
 ## License
 
 ZDNA-Fuzzy Hunter is released under the [MIT License](LICENSE).
+
+## Citation and preservation
+
+Machine-readable citation metadata are provided in [`CITATION.cff`](CITATION.cff).
+The versioned GitHub release is intended to be archived with Zenodo so that the
+exact code, validation inputs and supplementary files receive a persistent DOI.
+Please cite the version-specific Zenodo DOI once the release is published.

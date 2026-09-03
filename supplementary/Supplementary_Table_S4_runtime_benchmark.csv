@@ -1,7 +1,7 @@
-benchmark,stage,seconds,details
-"dm6 main chromosomes, end-to-end",FASTA input,1.875,8 principal chromosomes
-"dm6 main chromosomes, end-to-end",Two local Hunter scans,77.457,m2_l8_t30 and m2_l10_t60
-"dm6 main chromosomes, end-to-end",Candidate merge and fuzzy scoring,8.975,"482,286 candidate components"
-"dm6 main chromosomes, end-to-end",CSV output,0.470,"33,125 balanced-mode calls"
-"dm6 main chromosomes, end-to-end",Wall time,89.580,"Apple M2, 8 cores, 16 GB; macOS 26.6; Python 3.12.13; no network"
-Precomputed feature table,Fuzzy scoring and CSV output,0.910,"Median of 5 runs; range 0.900-0.960 s; 33,125 rows"
+benchmark,stage,seconds,preset,mode,min_score,details
+"dm6 main chromosomes, end-to-end",FASTA input,1.875,genome-balanced,strict,50,8 principal chromosomes
+"dm6 main chromosomes, end-to-end",Two local Hunter scans,77.457,genome-balanced,strict,50,m2_l8_t30 and m2_l10_t60
+"dm6 main chromosomes, end-to-end",Candidate merge and fuzzy scoring,8.975,genome-balanced,strict,50,"482,286 candidate components"
+"dm6 main chromosomes, end-to-end",CSV output,0.470,genome-balanced,strict,50,"33,125 strict-mode calls"
+"dm6 main chromosomes, end-to-end",Wall time,89.580,genome-balanced,strict,50,"Apple M2, 8 cores, 16 GB; macOS 26.6; Python 3.12.13; no network"
+Precomputed feature table,Fuzzy scoring and CSV output,0.910,genome-balanced,strict,50,"Median of 5 runs; range 0.900-0.960 s; 33,125 rows"
