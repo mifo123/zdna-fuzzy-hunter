@@ -424,6 +424,6 @@ ZDNA-Fuzzy Hunter is released under the [MIT License](LICENSE).
 ## Citation and preservation
 
 Machine-readable citation metadata are provided in [`CITATION.cff`](CITATION.cff).
-The versioned GitHub release is intended to be archived with Zenodo so that the
-exact code, validation inputs and supplementary files receive a persistent DOI.
-Please cite the version-specific Zenodo DOI once the release is published.
+Version 1.1.0, including the exact code, validation inputs and supplementary
+files, is preserved on Zenodo. Please cite the version-specific DOI:
+[10.5281/zenodo.22279840](https://doi.org/10.5281/zenodo.22279840).

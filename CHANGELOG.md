@@ -2,6 +2,8 @@
 
 ## 1.1.0
 
+- Archived the versioned software release and supplementary files under Zenodo
+  DOI `10.5281/zenodo.22279840`.
 - Added a fully local Z-DNA Hunter backend and retained the optional IBP API
   backend.
 - Exposed the complete frozen fuzzy model in machine-readable form.
