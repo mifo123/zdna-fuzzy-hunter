@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Reproduce the reported Shin benchmark with the released feature table.
+"""Reproduce the reported Shin analysis with the released source and context data.
 
-The script invokes the public command-line interface for each operating mode,
-computes the labelled confusion matrix and verifies the results against the
-machine-readable expected values shipped with the repository.
+The script first rebuilds the Z-DNA Hunter part of the analysis-ready feature
+table from the released HG Shin FASTA files, audits the 391-to-385 locus
+accounting, invokes the public CLI for each operating mode, and verifies the
+results against the machine-readable expected values.
 """
 
 from __future__ import annotations
@@ -20,15 +21,23 @@ from typing import Dict
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DETECTOR = REPO_ROOT / "zdna_fuzzy_detector.py"
-DEFAULT_INPUT = REPO_ROOT / "validation" / "data" / "shin_publication_features.csv"
-EXPECTED_PATH = REPO_ROOT / "validation" / "data" / "shin_expected_metrics.json"
+BUILDER = REPO_ROOT / "validation" / "build_shin_analysis_features.py"
+DATA_DIR = REPO_ROOT / "validation" / "data"
+DEFAULT_INPUT = DATA_DIR / "shin_analysis_features.csv"
+DEFAULT_CONTEXT = DATA_DIR / "shin_context_features.csv"
+SOURCE_DIR = DATA_DIR / "source"
+EXPECTED_PATH = DATA_DIR / "shin_expected_metrics.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "shin_reproduction"
 MODES = ("balanced", "moderate", "strict")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
+    parser.add_argument(
+        "--input",
+        type=Path,
+        help="Use a custom analysis-ready table instead of rebuilding the released one.",
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
@@ -108,20 +117,35 @@ def write_summary_csv(rows: list[dict[str, object]], path: Path) -> None:
 
 def main() -> None:
     args = parse_args()
-    input_path = args.input.resolve()
     output_dir = args.output_dir.resolve()
-    if not input_path.exists():
-        raise SystemExit(f"Shin feature table not found: {input_path}")
-
     expected = json.loads(EXPECTED_PATH.read_text(encoding="utf-8"))
-    observed_sha256 = sha256(input_path)
-    if input_path == DEFAULT_INPUT.resolve() and observed_sha256 != expected["input_sha256"]:
-        raise SystemExit(
-            "Released Shin feature table checksum does not match "
-            f"{EXPECTED_PATH.relative_to(REPO_ROOT)}"
-        )
-
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    rebuild_performed = args.input is None
+    if rebuild_performed:
+        if sha256(DEFAULT_CONTEXT) != expected["context_input_sha256"]:
+            raise SystemExit("Released author-derived context table checksum is not the expected value")
+        for filename, wanted_sha256 in expected["source_sha256"].items():
+            if sha256(SOURCE_DIR / filename) != wanted_sha256:
+                raise SystemExit(f"Released source FASTA checksum mismatch: {filename}")
+        input_path = output_dir / "shin_rebuilt_analysis_features.csv"
+        subprocess.run(
+            [sys.executable, str(BUILDER), "--output", str(input_path)],
+            cwd=REPO_ROOT,
+            check=True,
+        )
+        released_sha256 = sha256(DEFAULT_INPUT)
+        rebuilt_sha256 = sha256(input_path)
+        if released_sha256 != expected["analysis_input_sha256"]:
+            raise SystemExit("Released analysis feature table checksum is not the expected value")
+        if rebuilt_sha256 != released_sha256:
+            raise SystemExit("Rebuilt analysis feature table differs from the released table")
+    else:
+        input_path = args.input.resolve()
+        if not input_path.exists():
+            raise SystemExit(f"Shin feature table not found: {input_path}")
+
+    observed_sha256 = sha256(input_path)
     summary_rows: list[dict[str, object]] = []
     for mode in MODES:
         output_path = output_dir / f"shin_{mode}_predictions.csv"
@@ -151,9 +175,13 @@ def main() -> None:
             {
                 "model_version": expected["model_version"],
                 "preset": "shin-publication",
+                "rebuild_performed": rebuild_performed,
+                "input_kind": expected["input_kind"],
                 "input": str(input_path),
                 "input_sha256": observed_sha256,
                 "loci": expected["loci"],
+                "source_loci": expected["source_loci"],
+                "excluded_loci": expected["excluded_loci"],
                 "modes": {row["mode"]: {k: v for k, v in row.items() if k != "mode"} for row in summary_rows},
                 "matches_released_expected_values": True,
             },
@@ -162,7 +190,7 @@ def main() -> None:
         + "\n",
         encoding="utf-8",
     )
-    print(f"Verified all {len(MODES)} Shin operating modes.")
+    print(f"Verified all {len(MODES)} Shin operating modes after source/cohort audit.")
     print(f"Metrics: {summary_csv}")
     print(f"Machine-readable summary: {summary_json}")
 

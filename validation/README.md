@@ -2,20 +2,22 @@
 
 ## Shin benchmark
 
-The exact reported Shin benchmark can be reproduced without network access or
-an API account:
+The exact reported Shin analysis can be reproduced without network access or an
+API account:
 
 ```bash
 python validation/reproduce_shin_benchmark.py
 ```
 
-The script uses the released 385-locus feature table in `validation/data/`,
-runs the public CLI in all three operating modes and verifies every confusion
-matrix and reported performance metric. See `validation/data/README.md` for
-input provenance, coordinate conventions and the SHA-256 checksum.
+The script audits all 391 records in the released source FASTA files, documents
+the six non-primary `*_random` contigs excluded from the 385-locus analysis,
+rebuilds both Z-DNA Hunter feature sets locally, runs the public CLI in all
+three operating modes, and verifies every confusion matrix and reported metric.
+See `validation/data/README.md` for provenance, coordinate conventions,
+checksums, and the limits of the author-derived context variables.
 
-This is the canonical benchmark-reproduction command. Supplementary Table S1
-is a publication output and is not accepted as a substitute input table.
+This is the canonical analysis-reproduction command. Supplementary Table S1 is
+a publication output and is not accepted as a substitute input table.
 
 ## Independent experimental validation
 

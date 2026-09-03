@@ -112,30 +112,40 @@ The reported Shin operating points are:
 | Model / mode | Recall | Specificity | Balanced accuracy |
 |---|---:|---:|---:|
 | Z-DNABERT hg18 threshold 0.25, published external row | 0.877 | 0.890 | 0.880 |
-| ZDNA-Fuzzy Hunter, balanced | 0.859 | 0.904 | 0.882 |
-| ZDNA-Fuzzy Hunter, moderate-specificity | 0.840 | 0.945 | 0.892 |
-| ZDNA-Fuzzy Hunter, strict-specificity | 0.830 | 0.973 | 0.901 |
+| ZDNA-Fuzzy Hunter, balanced | 0.862 | 0.904 | 0.883 |
+| ZDNA-Fuzzy Hunter, moderate-specificity | 0.843 | 0.945 | 0.894 |
+| ZDNA-Fuzzy Hunter, strict-specificity | 0.833 | 0.973 | 0.903 |
 
 Because Z-DNABERT was not rerun in the same pipeline, the near-equal balanced
 accuracy values should be interpreted as comparable published operating points,
 not evidence that one method outperforms the other.
 
-### Exact Shin benchmark reproduction
+### Audited Shin analysis reproduction
 
-The repository includes the immutable 385-locus input feature table, expected
-confusion matrices and a standard-library-only reproduction script. From a
-fresh clone, run:
+The public HG Shin FASTA cohort linked by the Z-DNABERT repository contains 391
+records (316 positive and 75 negative). The reported analysis used 385 records
+on the 24 primary hg18 chromosomes; six `*_random`-contig records were excluded.
+The exact identifiers and reason are machine-readable in
+[`shin_expected_metrics.json`](validation/data/shin_expected_metrics.json).
+
+The repository includes those source FASTA files, the author-derived context
+variables used during model fitting, and a standard-library-only reproduction
+script. From a fresh clone, run:
 
 ```bash
 python validation/reproduce_shin_benchmark.py
 ```
 
-The command invokes the released CLI for the balanced, moderate and strict
-operating modes, writes per-locus predictions and summary tables to
-`results/shin_reproduction/`, and exits with an error if any count or metric
-differs from the released expected values. It verifies the input table by
-SHA-256 before scoring. Input provenance and the expected values are documented
-in [`validation/data/README.md`](validation/data/README.md).
+The command audits the 391-to-385 cohort accounting, converts the source FASTA
+headers from 1-based closed to 0-based half-open coordinates, rebuilds both
+Z-DNA Hunter feature sets locally, and then evaluates the balanced, moderate
+and strict modes. It exits with an error if the rebuilt feature table or any
+metric differs from the released expected values.
+
+`shin_context_features.csv` is explicitly an author-generated intermediate,
+not original Shin data and not independent validation. Its role and derivation
+limits are documented in
+[`validation/data/README.md`](validation/data/README.md).
 
 ### Independent U2OS check
 
@@ -332,7 +342,7 @@ backend:
 
 ```bash
 python zdna_fuzzy_detector.py \
-  --score-feature-table validation/data/shin_publication_features.csv \
+  --score-feature-table validation/data/shin_analysis_features.csv \
   --preset shin-publication \
   --mode balanced \
   --include-all \
@@ -340,8 +350,9 @@ python zdna_fuzzy_detector.py \
 ```
 
 `supplementary/Supplementary_Table_S1_Shin_per_locus.csv` is a compact
-publication output, not a scoring input. Use the released validation feature
-table above when reproducing the benchmark.
+publication output, not a scoring input. The canonical reproduction command is
+`python validation/reproduce_shin_benchmark.py`, which first rebuilds the
+analysis table from the released source and context inputs.
 
 ## Runtime benchmark
 

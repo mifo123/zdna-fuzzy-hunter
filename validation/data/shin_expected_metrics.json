@@ -1,41 +1,87 @@
 {
   "model_version": "1.1.0",
-  "input_sha256": "eeae4ae255adf0e5ee243305a46e17c1ba6add9fda90c120cf36b2b872e2c107",
+  "input_kind": "author-derived context variables plus locally rebuilt Z-DNA Hunter features",
+  "analysis_input_sha256": "94aaba1aa86cea43df2ddf09cb34103edd0d8a56a5475d87117b693d249a9ef1",
+  "context_input_sha256": "f3f831a45f917c1c38329312e1f4ffe03724637f17dba959956cb2662e6715d0",
+  "source_loci": {
+    "total": 391,
+    "positive": 316,
+    "negative": 75,
+    "assembly": "NCBI36/hg18",
+    "source_header_coordinates": "1-based, closed"
+  },
   "loci": {
     "total": 385,
     "positive": 312,
-    "negative": 73
+    "negative": 73,
+    "inclusion_rule": "primary chromosomes chr1-chr22, chrX and chrY"
+  },
+  "excluded_loci": [
+    {
+      "candidate_id": "SHIN_REAL_POSITIVE_ZFS_88",
+      "source_header": "ZFS_88_chr6_random_162202_162585",
+      "reason": "non-primary *_random contig"
+    },
+    {
+      "candidate_id": "SHIN_REAL_POSITIVE_ZFS_170",
+      "source_header": "ZFS_170_chr6_random_1293529_1293912",
+      "reason": "non-primary *_random contig"
+    },
+    {
+      "candidate_id": "SHIN_REAL_POSITIVE_ZFS_185",
+      "source_header": "ZFS_185_chr6_random_1286804_1287187",
+      "reason": "non-primary *_random contig"
+    },
+    {
+      "candidate_id": "SHIN_REAL_POSITIVE_ZFS_265",
+      "source_header": "ZFS_265_chrX_random_1541886_1542269",
+      "reason": "non-primary *_random contig"
+    },
+    {
+      "candidate_id": "SHIN_REAL_NEGATIVE_ZFS_67",
+      "source_header": "ZFS_67_chr8_random_325866_326249",
+      "reason": "non-primary *_random contig"
+    },
+    {
+      "candidate_id": "SHIN_REAL_NEGATIVE_ZFS_74",
+      "source_header": "ZFS_74_chr19_random_2_371",
+      "reason": "non-primary *_random contig"
+    }
+  ],
+  "source_sha256": {
+    "ZFS_yes.fasta": "529cee5f3972c6c038c108e04088ff6ac1c4c234c3ff35ad0563801ddd9c17ad",
+    "ZFS_no.fasta": "c858f5875b9768e60b3c6ab4857005ac9cc844242af1061607aba5f36c437f2d"
   },
   "modes": {
     "balanced": {
-      "tp": 268,
-      "fn": 44,
+      "tp": 269,
+      "fn": 43,
       "fp": 7,
       "tn": 66,
-      "selected": 275,
-      "recall": 0.858974,
+      "selected": 276,
+      "recall": 0.862179,
       "specificity": 0.90411,
-      "balanced_accuracy": 0.881542
+      "balanced_accuracy": 0.883145
     },
     "moderate": {
-      "tp": 262,
-      "fn": 50,
+      "tp": 263,
+      "fn": 49,
       "fp": 4,
       "tn": 69,
-      "selected": 266,
-      "recall": 0.839744,
+      "selected": 267,
+      "recall": 0.842949,
       "specificity": 0.945205,
-      "balanced_accuracy": 0.892475
+      "balanced_accuracy": 0.894077
     },
     "strict": {
-      "tp": 259,
-      "fn": 53,
+      "tp": 260,
+      "fn": 52,
       "fp": 2,
       "tn": 71,
-      "selected": 261,
-      "recall": 0.830128,
+      "selected": 262,
+      "recall": 0.833333,
       "specificity": 0.972603,
-      "balanced_accuracy": 0.901365
+      "balanced_accuracy": 0.902968
     }
   }
 }

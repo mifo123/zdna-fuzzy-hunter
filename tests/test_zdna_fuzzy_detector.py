@@ -81,8 +81,27 @@ class ShinReproductionTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
             summary = json.loads((Path(tmpdir) / "shin_benchmark_metrics.json").read_text(encoding="utf-8"))
             self.assertTrue(summary["matches_released_expected_values"])
-            self.assertEqual(summary["modes"]["balanced"]["tp"], 268)
+            self.assertTrue(summary["rebuild_performed"])
+            self.assertEqual(summary["source_loci"]["total"], 391)
+            self.assertEqual(len(summary["excluded_loci"]), 6)
+            self.assertEqual(summary["modes"]["balanced"]["tp"], 269)
             self.assertEqual(summary["modes"]["balanced"]["fp"], 7)
+
+    def test_released_shin_supplementary_table_is_generated_output(self) -> None:
+        repo_root = MODULE_PATH.parent
+        script = repo_root / "validation" / "build_shin_supplementary_table.py"
+        released = repo_root / "supplementary" / "Supplementary_Table_S1_Shin_per_locus.csv"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            rebuilt = Path(tmpdir) / released.name
+            completed = subprocess.run(
+                [sys.executable, str(script), "--output", str(rebuilt)],
+                cwd=repo_root,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            self.assertEqual(rebuilt.read_bytes(), released.read_bytes())
 
 
 if __name__ == "__main__":

@@ -4,3 +4,4 @@
 *.py text eol=lf
 *.yml text eol=lf
 *.cff text eol=lf
+*.fasta text eol=lf
